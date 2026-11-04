@@ -14,7 +14,7 @@ const char LispLibrary[] = "";
 // #define printgcs
 // #define sdcardsupport
 #define gfxsupport
-// #define lisplibrary
+#define lisplibrary
 #define lineeditor
 // #define vt100
 #define extensions
@@ -31,6 +31,14 @@ const char LispLibrary[] = "";
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <ArduinoOTA.h>
+#include <vector>
+#include <unordered_map>
+#include "miniz.h"      // ROM inflate, for EPUB (zip) files
+#include <ft2build.h>   // FreeType, from the OpenFontRender library (EPUB reader fonts)
+#pragma push_macro("extensions")
+#undef extensions          // uLisp compile option; clashes with a FreeType struct field
+#include FT_FREETYPE_H
+#pragma pop_macro("extensions")
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <FS.h>
@@ -7007,6 +7015,8 @@ void initgfx () {
     #endif
   #endif
 }
+
+SET_LOOP_TASK_STACK_SIZE(24 * 1024);  // headroom for FreeType and the EPUB reader
 
 void setup () {
   Serial.begin(9600);

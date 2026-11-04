@@ -6,7 +6,107 @@
 */
 
 // Lisp Library
-const char LispLibrary[] = "";
+const char LispLibrary[] =
+"(defvar *books-dir* \"/sd/books\")\n"
+"(defun reader-touch () (wait-touch))\n"
+"(defun drop (n lst)\n"
+"  (loop (when (or (<= n 0) (null lst)) (return lst)) (setq lst (cdr lst)) (decf n)))\n"
+"(defun ends-with (s suffix)\n"
+"  (let ((n (length s)) (m (length suffix)))\n"
+"    (and (>= n m) (string= (subseq s (- n m)) suffix))))\n"
+"(defun reader-books ()\n"
+"  (let ((books nil))\n"
+"    (dolist (f (list-files *books-dir*))\n"
+"      (when (and (ends-with f \".epub\") (not (string= (subseq f 0 (min 2 (length f))) \"._\")))\n"
+"        (push f books)))\n"
+"    (reverse books)))\n"
+"(defun ui-button (label x y w h)\n"
+"  (draw-rect x y w h 0)\n"
+"  (draw-ttf label (+ x (truncate w 2)) (+ y (truncate h 2) 8) 24 1))\n"
+"(defun ui-pick (title items)\n"
+"  (let ((start 0) (per 9) (n (length items)))\n"
+"    (loop\n"
+"      (with-batch\n"
+"        (clear-screen)\n"
+"        (draw-ttf title 270 70 34 1 1 0 480)\n"
+"        (let ((y 120) (i 0))\n"
+"          (dolist (it (drop start items))\n"
+"            (when (< i per)\n"
+"              (draw-ttf it 40 (+ y 52) 26 0 0 0 460)\n"
+"              (draw-line 40 (+ y 78) 500 (+ y 78) (gray 12))\n"
+"              (setq y (+ y 80))\n"
+"              (incf i))))\n"
+"        (when (> start 0) (ui-button \"Prev\" 20 880 150 60))\n"
+"        (ui-button \"Back\" 195 880 150 60)\n"
+"        (when (< (+ start per) n) (ui-button \"Next\" 370 880 150 60)))\n"
+"      (let* ((p (reader-touch)) (x (first p)) (y (second p)))\n"
+"        (cond ((>= y 870)\n"
+"               (cond ((< x 180) (when (> start 0) (setq start (- start per))))\n"
+"                     ((< x 360) (return nil))\n"
+"                     (t (when (< (+ start per) n) (setq start (+ start per))))))\n"
+"              ((>= y 120)\n"
+"               (let ((i (+ start (truncate (- y 120) 80))))\n"
+"                 (when (and (< i n) (< (- i start) per)) (return i)))))))))\n"
+"(defun reader-library ()\n"
+"  (set-rotation 0)\n"
+"  (let ((books (reader-books)))\n"
+"    (if (null books)\n"
+"        (progn\n"
+"          (with-batch\n"
+"            (clear-screen)\n"
+"            (draw-ttf \"No books\" 270 200 34 1 1)\n"
+"            (draw-ttf (format nil \"Put .epub files in ~a\" *books-dir*) 270 260 22 1))\n"
+"          (wait-touch 5000)\n"
+"          nil)\n"
+"        (let ((i (ui-pick \"Library\" (mapcar (lambda (b) (subseq b 0 (- (length b) 5))) books))))\n"
+"          (when i (concatenate 'string *books-dir* \"/\" (nth i books)))))))\n"
+"(defun reader-menu ()\n"
+"  (let ((info (book-info))\n"
+"        (items '(\"Back to book\" \"Contents\" \"Larger text\" \"Smaller text\" \"Change font\" \"Library\" \"Exit reader\")))\n"
+"    (with-batch\n"
+"      (clear-screen)\n"
+"      (draw-ttf (json-get info \"title\") 270 70 28 1 1 0 480)\n"
+"      (draw-ttf (format nil \"~a  ~a pt  battery ~a%\" (json-get info \"font\") (json-get info \"font-size\") (battery)) 270 110 18 1 0 6 480)\n"
+"      (let ((y 150))\n"
+"        (dolist (it items)\n"
+"          (ui-button it 70 y 400 76)\n"
+"          (setq y (+ y 96)))))\n"
+"    (loop\n"
+"      (let* ((p (reader-touch)) (y (second p)) (i (truncate (- y 150) 96)))\n"
+"        (when (and (>= y 150) (< i 7))\n"
+"          (cond ((= i 0) (return 'back))\n"
+"                ((= i 1)\n"
+"                 (let* ((toc (book-toc)) (k (ui-pick \"Contents\" (mapcar car toc))))\n"
+"                   (when k (book-goto (cdr (nth k toc))) (return 'shown))\n"
+"                   (return 'back)))\n"
+"                ((= i 2) (book-font-size (min 60 (+ (book-font-size) 2))) (return 'shown))\n"
+"                ((= i 3) (book-font-size (max 12 (- (book-font-size) 2))) (return 'shown))\n"
+"                ((= i 4)\n"
+"                 (let* ((fams (book-fonts)) (k (ui-pick \"Font\" fams)))\n"
+"                   (when k (book-font (nth k fams)) (return 'shown))\n"
+"                   (return 'back)))\n"
+"                ((= i 5) (return 'library))\n"
+"                (t (return 'exit))))))))\n"
+"(defun reader-read (path)\n"
+"  (book-open path)\n"
+"  (loop\n"
+"    (let* ((p (reader-touch)) (x (first p)) (y (second p)))\n"
+"      (cond ((< y 110)\n"
+"             (let ((r (reader-menu)))\n"
+"               (cond ((eq r 'back) (book-render))\n"
+"                     ((eq r 'library) (return 'library))\n"
+"                     ((eq r 'exit) (return 'exit)))))\n"
+"            ((< x 180) (book-prev))\n"
+"            (t (book-next))))))\n"
+"(defun reader (&optional path)\n"
+"  (let ((next (if path (reader-read path) 'library)))\n"
+"    (loop\n"
+"      (unless (eq next 'library) (return))\n"
+"      (let ((b (reader-library)))\n"
+"        (if b (setq next (reader-read b)) (return)))))\n"
+"  (book-close)\n"
+"  (epd-mode 1)\n"
+"  nil)";
 
 // Compile options
 
@@ -15,7 +115,7 @@ const char LispLibrary[] = "";
 // #define printgcs
 // #define sdcardsupport
 #define gfxsupport
-// #define lisplibrary
+#define lisplibrary
 #define lineeditor
 // #define vt100
 #define extensions
@@ -32,6 +132,14 @@ const char LispLibrary[] = "";
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <ArduinoOTA.h>
+#include <vector>
+#include <unordered_map>
+#include "miniz.h"      // ROM inflate, for EPUB (zip) files
+#include <ft2build.h>   // FreeType, from the OpenFontRender library (EPUB reader fonts)
+#pragma push_macro("extensions")
+#undef extensions          // uLisp compile option; clashes with a FreeType struct field
+#include FT_FREETYPE_H
+#pragma pop_macro("extensions")
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <FS.h>
@@ -7464,6 +7572,8 @@ void initgfx () {
     #endif
   #endif
 }
+
+SET_LOOP_TASK_STACK_SIZE(24 * 1024);  // headroom for FreeType and the EPUB reader
 
 void setup () {
   Serial.begin(9600);

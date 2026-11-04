@@ -928,6 +928,8 @@ const char doc_jsonget[] = "(json-get data key-or-index*)\n"
 const char doc_httpgetjson[] = "(http-get-json url)\n"
 "Fetches url and parses the response as JSON, using less memory than (json-parse (http-get url)).";
 
+#include "reader.inc"
+
 const char doc_listfiles[] = "(list-files [dir])\n"
 "Lists a directory as strings; subdirectories end in /. \"/\" is internal flash, \"/sd\" the SD card.";
 const char doc_readfile[] = "(read-file path)\n"
@@ -1039,6 +1041,19 @@ const tbl_entry_t lookup_table2[] = {
   { "json-string", fn_jsonstring, 0212, doc_jsonstring },
   { "json-get", fn_jsonget, 0217, doc_jsonget },
   { "http-get-json", fn_httpgetjson, 0211, doc_httpgetjson },
+  { "book-open", fn_bookopen, 0211, doc_bookopen },
+  { "book-next", fn_booknext, 0200, doc_booknext },
+  { "book-prev", fn_bookprev, 0200, doc_bookprev },
+  { "book-goto", fn_bookgoto, 0212, doc_bookgoto },
+  { "book-toc", fn_booktoc, 0200, doc_booktoc },
+  { "book-info", fn_bookinfo, 0200, doc_bookinfo },
+  { "book-font-size", fn_bookfontsize, 0201, doc_bookfontsize },
+  { "book-font", fn_bookfont, 0201, doc_bookfont },
+  { "book-fonts", fn_bookfonts, 0200, doc_bookfonts },
+  { "book-close", fn_bookclose, 0200, doc_bookclose },
+  { "book-render", fn_bookrender, 0200, doc_bookrender },
+  { "draw-ttf", fn_drawttf, 0247, doc_drawttf },
+  { "ttf-width", fn_ttfwidth, 0223, doc_ttfwidth },
 };
 
 tbl_entry_t *tables[] = {lookup_table, lookup_table2};

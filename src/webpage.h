@@ -103,6 +103,7 @@ const char WEBPAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
   <button class="tab" data-v="editor">Editor &amp; Files</button>
   <button class="tab" data-v="docs">Docs</button>
   <button class="tab" data-v="examples">Examples</button>
+  <a class="tab" href="/api/screen" target="_blank" title="What the e-ink screen shows right now" style="text-decoration:none">Screenshot</a>
   <div class="status" id="status"></div>
 </header>
 <main>
@@ -175,9 +176,12 @@ const char WEBPAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
     <tr><td>Files</td><td><code>list-files read-file write-file delete-file make-directory file-exists sd-card-p load save-image load-image</code></td></tr>
     <tr><td>Network</td><td><code>http-get http-post http-status wifi-rssi wifi-localip wifi-connect</code></td></tr>
     <tr><td>JSON</td><td><code>json-parse json-string json-get http-get-json</code></td></tr>
+    <tr><td>Books</td><td><code>reader book-open book-next book-prev book-goto book-toc book-info book-font book-fonts book-font-size book-render book-close draw-ttf ttf-width</code></td></tr>
   </table>
   <h3>Files</h3>
   <p>Paths starting with <code>/sd/</code> are on the SD card, and anything else is on the internal flash (about 3 MB). The <b>Editor &amp; Files</b> tab saves and opens programs. <b>Save &amp; load</b> runs a file on the device with <code>(load "/file.lisp")</code>, so its definitions stay available in the REPL.</p>
+  <h3>Reading EPUB books</h3>
+  <p>Put <code>.epub</code> files in <code>/sd/books</code> and fonts (<code>.ttf</code> or <code>.otf</code> with TrueType outlines, named like <code>Family-Regular.ttf</code>, <code>Family-Bold.ttf</code>, <code>Family-Italic.ttf</code>) in <code>/sd/fonts</code>. Run <code>(reader)</code> for the library, or <code>(reader "/sd/books/name.epub")</code>. While reading, tap the right side for the next page, the left third for the previous page, and the top strip for the menu (contents, text size, font, library, exit). The reader remembers your page in each book. It is written in Lisp on top of the <code>book-</code> functions, so you can change it: see <code>patched/library.lisp</code> in the project.</p>
   <h3>Things to know</h3>
   <p>The browser and the USB serial REPL share one interpreter. A web request is answered only while the serial REPL is idle, and a long-running program blocks everything until it finishes. To stop a runaway program, press the reset button, or send <code>~</code> over the serial monitor. Definitions live in RAM until reset; keep programs in files and <code>load</code> them.</p>
 </template>
@@ -412,6 +416,17 @@ data                          ; objects become (("key" . value) ...)
   (draw-text (format nil "SD card   ~a" (if (sd-card-p) "inserted" "none")) 40 360)
   (draw-text (format nil "Tilt      ~a" (mapcar round (accel))) 40 420)
   (set-font 0))
+</script>
+<script type="text/plain" class="example" data-title="EPUB reader" data-desc="Opens the library of books in /sd/books. Tap right for next page, the left third for previous, the top for the menu. This page waits until you choose Exit reader.">
+(reader)
+</script>
+<script type="text/plain" class="example" data-title="Books from Lisp" data-desc="The reader's building blocks: open a book, look at its contents, and turn pages from code.">
+(book-open "/sd/books/Austen, Jane - Pride and Prejudice.epub")
+(book-info)
+(subseq (book-toc) 0 5)
+(book-goto 2)          ; chapter index from book-toc
+(book-next)            ; returns (chapter page pages)
+(book-fonts)
 </script>
 <script type="text/plain" class="example" data-title="Lisp basics" data-desc="Recursion, lambdas, mapcar and timing.">
 (defun fib (n)

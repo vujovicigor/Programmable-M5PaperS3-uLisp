@@ -163,6 +163,40 @@ void webinfo () {
   webserver.send(200, "application/json", json);
 }
 
+// GET /api/screen: the e-ink framebuffer as an 8-bit grayscale BMP
+void webscreen () {
+  int w = tft.width(), h = tft.height();
+  int rowbytes = (w + 3) & ~3;
+  uint32_t datasize = rowbytes * h, offset = 14 + 40 + 256 * 4;
+  uint8_t hdr[54];
+  memset(hdr, 0, sizeof(hdr));
+  auto put32 = [&](int at, uint32_t v) { hdr[at] = v; hdr[at+1] = v >> 8; hdr[at+2] = v >> 16; hdr[at+3] = v >> 24; };
+  hdr[0] = 'B'; hdr[1] = 'M';
+  put32(2, offset + datasize); put32(10, offset);
+  put32(14, 40); put32(18, w); put32(22, (uint32_t)(-h));   // negative height: top-down rows
+  hdr[26] = 1; hdr[28] = 8; put32(34, datasize); put32(46, 256);
+  webserver.setContentLength(offset + datasize);
+  webserver.send(200, "image/bmp", "");
+  webserver.sendContent((const char *)hdr, sizeof(hdr));
+  uint8_t pal[1024];
+  for (int i = 0; i < 256; i++) { pal[i*4] = pal[i*4+1] = pal[i*4+2] = i; pal[i*4+3] = 0; }
+  webserver.sendContent((const char *)pal, sizeof(pal));
+  uint16_t *line = (uint16_t *)malloc(w * 2);
+  uint8_t *out = (uint8_t *)malloc(rowbytes);
+  if (!line || !out) { free(line); free(out); return; }
+  memset(out, 0, rowbytes);
+  for (int y = 0; y < h; y++) {
+    tft.readRect(0, y, w, 1, line);
+    for (int x = 0; x < w; x++) {
+      uint16_t c = line[x];
+      c = (c >> 8) | (c << 8);                          // readRect returns byte-swapped RGB565
+      out[x] = ((c >> 11) * 527 + 23) >> 6;             // red channel, 5 to 8 bits (gray)
+    }
+    webserver.sendContent((const char *)out, rowbytes);
+  }
+  free(line); free(out);
+}
+
 void webshowstatus (const char *msg) {
   Serial.print("\r\n"); Serial.println(msg);
   #if defined(gfxsupport)
@@ -229,6 +263,7 @@ void webstart () {
   webserver.on("/api/file", HTTP_POST, webputfile);
   webserver.on("/api/file", HTTP_DELETE, webdeletefile);
   webserver.on("/api/mkdir", HTTP_POST, webmkdir);
+  webserver.on("/api/screen", HTTP_GET, webscreen);
   webserver.onNotFound([]() { webserver.send(404, "text/plain", "not found"); });
   webserver.begin();
   MDNS.begin("ulisp");

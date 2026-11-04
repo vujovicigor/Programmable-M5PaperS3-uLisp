@@ -31,6 +31,8 @@ and a browser IDE served over WiFi with a REPL, an editor, a file manager, docs 
 - `patched/paper-ext.inc`: the PaperS3 Lisp library (the second uLisp lookup table)
 - `patched/webrepl.inc`: the web server, `/eval` and the file API
 - `src/webpage.h`: the browser IDE (a single HTML page)
+- `patched/reader.inc`: the EPUB engine; `patched/library.lisp`: Lisp built into the firmware (the reader UI),
+  embedded by `tools/mkproto.py`
 - `src/ulisp.cpp`: **generated**; don't edit it. After changing anything in `patched/`, regenerate it with
   `python3 tools/mkproto.py patched/ulisp-esp.ino src/ulisp.cpp`. PlatformIO's .ino converter can't handle uLisp,
   so this script adds the forward declarations instead.
@@ -61,6 +63,29 @@ Examples live in `src/webpage.h` as `<script type="text/plain" class="example">`
 | `(load path)` | evaluate a Lisp file |
 | `(http-get url)`, `(http-post url body [type])`, `(http-status)`, `(wifi-rssi)` | network (https OK, certificates not verified) |
 | `(json-parse str)`, `(json-string data [pretty])`, `(json-get data key-or-index ...)`, `(http-get-json url)` | JSON: objects become `(("key" . value) ...)`, arrays become lists; `true` → `t`, `false`/`null` → `nil` |
+
+## EPUB reader
+Put `.epub` files in `/sd/books` and fonts in `/sd/fonts` (or `/fonts` on flash). Fonts must have TrueType
+outlines, which most `.ttf` and many `.otf` files do, and be named `Family-Regular`, `Family-Bold`,
+`Family-Italic` and `Family-BoldItalic`. Then run `(reader)`. While reading, tap the right side for the
+next page, the left third for the previous page, and the top strip for the menu. The menu has contents,
+text size, font, library and exit. Your position is saved next to each book as `<book>.epub.ulisp`.
+
+| Function | |
+|---|---|
+| `(reader [path])` | the touch reader (Lisp, in `patched/library.lisp`) |
+| `(book-open path)`, `(book-close)` | open (portrait, last position) / close (back to landscape) |
+| `(book-next)`, `(book-prev)`, `(book-goto chapter [page])`, `(book-render)` | navigation; return `(chapter page pages)` |
+| `(book-toc)`, `(book-info)` | contents as `((title . chapter) ...)`, details as an association list |
+| `(book-font [family])`, `(book-fonts)`, `(book-font-size [px])` | typography; changes keep your place |
+| `(draw-ttf str x y size [align style gray max-width])`, `(ttf-width str size [style])` | text in the reader font, for your own screens |
+
+The engine is in `patched/reader.inc`. It reads the zip with the ESP32-S3 ROM inflater, parses the OPF,
+NCX or nav and XHTML (paragraphs, headings, lists, quotes, code, bold, italic, images), renders glyphs
+with FreeType from the OpenFontRender library on 16 grays, and justifies lines. It does not hyphenate,
+and supports CSS only through tag defaults.
+
+`GET /api/screen` returns the current screen as a BMP; the web IDE has a **Screenshot** link.
 
 ## Display library (PaperS3 additions)
 Colours are RGB565 numbers; the panel shows 16 grays. `0` is black, `#xffff` is white.
