@@ -139,6 +139,35 @@ void webdeletefile () {
   webserver.send(ok ? 200 : 500, "text/plain", ok ? "deleted" : "delete failed");
 }
 
+// POST /api/upload?dir=/sd/books (multipart form, any number of files) or ?path=/full/name
+File UploadFile;
+bool UploadOk = false;
+int UploadCount = 0;
+
+void webuploadchunk () {
+  HTTPUpload &up = webserver.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    String path = webserver.hasArg("path") ? webserver.arg("path") : webserver.arg("dir") + "/" + up.filename;
+    String sub;
+    fs::FS *fs = resolvepath(path.c_str(), sub);
+    UploadOk = false;
+    if (fs) { UploadFile = fs->open(sub, "w", true); UploadOk = (bool)UploadFile; }
+  } else if (up.status == UPLOAD_FILE_WRITE) {
+    if (UploadOk && UploadFile.write(up.buf, up.currentSize) != up.currentSize) UploadOk = false;
+  } else if (up.status == UPLOAD_FILE_END) {
+    if (UploadFile) UploadFile.close();
+    if (UploadOk) UploadCount++;
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    if (UploadFile) UploadFile.close();
+    UploadOk = false;
+  }
+}
+
+void webuploaddone () {
+  webserver.send(UploadOk ? 200 : 500, "text/plain", UploadOk ? String(UploadCount) + " uploaded" : String("upload failed"));
+  UploadCount = 0;
+}
+
 void webmkdir () {
   String sub;
   fs::FS *fs = resolvepath(webserver.arg("path").c_str(), sub);
@@ -263,6 +292,7 @@ void webstart () {
   webserver.on("/api/file", HTTP_POST, webputfile);
   webserver.on("/api/file", HTTP_DELETE, webdeletefile);
   webserver.on("/api/mkdir", HTTP_POST, webmkdir);
+  webserver.on("/api/upload", HTTP_POST, webuploaddone, webuploadchunk);
   webserver.on("/api/screen", HTTP_GET, webscreen);
   webserver.onNotFound([]() { webserver.send(404, "text/plain", "not found"); });
   webserver.begin();

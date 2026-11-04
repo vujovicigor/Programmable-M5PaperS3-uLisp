@@ -299,11 +299,12 @@ bool rdloadfamily (const String &family) {
   if (!RdFT && FT_Init_FreeType(&RdFT)) return false;
   std::vector<String> files;
   rdfontfiles(files);
-  const char *suffix[4][3] = { {"-Regular", "", "-Book"}, {"-Bold", "-Semibold", "-SemiBold"},
-                               {"-Italic", "-Oblique", ""}, {"-BoldItalic", "-BoldOblique", ""} };
+  // Medium is preferred over Regular: heavier strokes read better on e-ink
+  const char *suffix[4][4] = { {"-Medium", "-Regular", "", "-Book"}, {"-Bold", "-Semibold", "-SemiBold", ""},
+                               {"-MediumItalic", "-Italic", "-Oblique", ""}, {"-BoldItalic", "-BoldOblique", "", ""} };
   String chosen[4];
   for (int s = 0; s < 4; s++)
-    for (int k = 0; k < 3 && !chosen[s].length(); k++) {
+    for (int k = 0; k < 4 && !chosen[s].length(); k++) {
       if (s > 0 && !suffix[s][k][0]) continue;
       String want = family + suffix[s][k];
       for (auto &p : files) if (rdbasename(p).equalsIgnoreCase(want)) { chosen[s] = p; break; }
@@ -316,8 +317,32 @@ bool rdloadfamily (const String &family) {
   return true;
 }
 
+int RdFontSize = 28;
+void rdloadmono ();
+
+void rdsavesettings () {
+  if (!flashmount()) return;
+  File f = LittleFS.open("/reader.cfg", "w");
+  if (f) { f.printf("%d %s\n", RdFontSize, RdFamily.c_str()); f.close(); }
+}
+
+// Loads the saved size and family; returns true if the family loaded
+bool rdloadsettings () {
+  if (!flashmount() || !LittleFS.exists("/reader.cfg")) return false;
+  File f = LittleFS.open("/reader.cfg", "r");
+  if (!f) return false;
+  String line = f.readStringUntil('\n'); f.close();
+  int sz = 0; char fam[64] = "";
+  int got = sscanf(line.c_str(), "%d %63s", &sz, fam);
+  if (got >= 1 && sz >= 12 && sz <= 60) RdFontSize = sz;
+  return got >= 2 && rdloadfamily(fam);
+}
+
 bool rdensurefonts () {
+  if (!RdFT && FT_Init_FreeType(&RdFT)) return false;
+  rdloadmono();
   if (RdFace[0]) return true;
+  if (rdloadsettings()) return true;
   const char *prefs[] = { "CrimsonPro", "Caladea", "DejaVuSerif", "Bitter", "OpenSans", "Roboto", "DejaVuSans" };
   for (const char *p : prefs) if (rdloadfamily(p)) return true;
   std::vector<String> files;          // any font with a -Regular face
@@ -327,7 +352,39 @@ bool rdensurefonts () {
   return false;
 }
 
+FT_Face RdMono = NULL;
+uint8_t *RdMonoData = NULL;
+bool RdMonoTried = false;
+
+// Loads a monospace family for code: the first font whose name contains "Mono"
+void rdloadmono () {
+  if (RdMonoTried) return;
+  RdMonoTried = true;
+  std::vector<String> files;
+  rdfontfiles(files);
+  String best;
+  for (auto &p : files) {
+    String b = rdbasename(p);
+    if (b.indexOf("Mono") < 0) continue;
+    if (b.endsWith("-Regular") || b.endsWith("-Medium")) { best = p; if (b.endsWith("-Regular")) break; }
+    else if (!best.length() && b.indexOf('-') < 0) best = p;
+  }
+  if (!best.length()) return;
+  String sub;
+  fs::FS *fs = resolvepath(best.c_str(), sub);
+  if (!fs) return;
+  File f = fs->open(sub, "r");
+  if (!f) return;
+  size_t n = f.size();
+  uint8_t *data = (uint8_t *)rdmalloc(n);
+  if (!data) { f.close(); return; }
+  f.read(data, n); f.close();
+  if (FT_New_Memory_Face(RdFT, data, n, 0, &RdMono)) { free(data); RdMono = NULL; return; }
+  RdMonoData = data;
+}
+
 FT_Face rdface (int style) {
+  if (style & 4) return RdMono ? RdMono : RdFace[0];
   style &= 3;
   if (RdFace[style]) return RdFace[style];
   if (style == 3 && RdFace[1]) return RdFace[1];
@@ -335,7 +392,7 @@ FT_Face rdface (int style) {
 }
 
 RdGlyph *rdglyph (uint32_t cp, int style, int size) {
-  uint64_t key = ((uint64_t)(style & 3) << 40) | ((uint64_t)size << 24) | cp;
+  uint64_t key = ((uint64_t)(style & 7) << 40) | ((uint64_t)size << 24) | cp;
   auto it = RdGlyphs.find(key);
   if (it != RdGlyphs.end()) return &it->second;
   if (RdGlyphs.size() > 4000) rdclearglyphs();
@@ -538,11 +595,12 @@ void rdclearchapter () { RdItems.clear(); RdItems.shrink_to_fit(); RdPoolLen = 0
 
 struct RdParser {
   String word; bool pendingspace = false;
-  int bold = 0, italic = 0, pre = 0, skip = 0;
+  int bold = 0, italic = 0, pre = 0, code = 0, skip = 0;
+  bool linestart = true;
   std::vector<uint8_t> blocks;
   std::vector<int> olcount;
   uint8_t block () { return blocks.empty() ? RB_P : blocks.back(); }
-  uint8_t style () { uint8_t b = block(); return ((bold || (b >= RB_H1 && b <= RB_H6)) ? 1 : 0) | (italic ? 2 : 0); }
+  uint8_t style () { uint8_t b = block(); return ((bold || (b >= RB_H1 && b <= RB_H6)) ? 1 : 0) | (italic ? 2 : 0) | ((code || pre) ? 4 : 0); }
   void flush () {
     if (!word.length()) return;
     RdItem it = { rdpooladd(word.c_str(), word.length()), (uint16_t)word.length(), RK_WORD, style(), block(), (uint8_t)pendingspace, 0 };
@@ -582,7 +640,8 @@ void rdparsechapter (const char *s, size_t n, const String &dir) {
       if (P.skip) continue;
       if (nm == "b" || nm == "strong" || nm == "th") { if (!sc) { P.flush(); P.bold += cl ? -1 : 1; if (P.bold < 0) P.bold = 0; } }
       else if (nm == "i" || nm == "em" || nm == "cite" || nm == "var" || nm == "dfn") { if (!sc) { P.flush(); P.italic += cl ? -1 : 1; if (P.italic < 0) P.italic = 0; } }
-      else if (nm == "br") { P.addmark(RK_BR); }
+      else if (nm == "code" || nm == "tt" || nm == "kbd" || nm == "samp") { if (!sc) { P.flush(); P.code += cl ? -1 : 1; if (P.code < 0) P.code = 0; } }
+      else if (nm == "br") { P.addmark(RK_BR); P.linestart = true; }
       else if (nm == "hr") { P.addmark(RK_PARA); P.addmark(RK_HR); P.addmark(RK_PARA); }
       else if (nm == "img" || nm == "image") {
         String src = rdattr(at, nm == "img" ? "src" : "href");
@@ -633,9 +692,13 @@ void rdparsechapter (const char *s, size_t n, const String &dir) {
       }
     }
     if (P.pre) {
-      if (c == '\n') { P.flush(); P.addmark(RK_BR); continue; }
+      if (c == '\n') { P.flush(); P.addmark(RK_BR); P.linestart = true; continue; }
       if (c == '\r') continue;
-      if (c == ' ' || c == '\t') { P.flush(); P.pendingspace = true; if (c == '\t') { P.word = "   "; } continue; }
+      if (c == ' ' || c == '\t') {
+        if (P.linestart) { P.word += c == '\t' ? "    " : " "; continue; }   // keep indentation
+        P.flush(); P.pendingspace = true; continue;
+      }
+      P.linestart = false;
       P.wordchar(&c, 1);
       continue;
     }
@@ -652,7 +715,6 @@ enum : uint8_t { RL_JUSTIFY = 1, RL_IMAGE = 2, RL_HR = 4, RL_CENTER = 8, RL_CODE
 
 std::vector<RdLine> RdLines;
 std::vector<uint32_t> RdPages;    // index of first line on each page
-int RdFontSize = 26;
 int RdChapter = -1, RdPage = 0;
 
 int rdblocksize (uint8_t b) {
@@ -722,7 +784,7 @@ void rdlayout () {
     int firstindent = (b == RB_P && !afterheading) ? size * 3 / 2 : 0;
     int lh = b == RB_PRE ? size * 13 / 10 : size * 14 / 10;
     if (heading) { y += size / 2; newline(lh * 2); }
-    int spacew = rdglyph(' ', 0, size)->adv;
+    int spacew = rdglyph(' ', b == RB_PRE ? 4 : 0, size)->adv;
     bool firstline = true;
     while (i < N && RdItems[i].kind != RK_PARA && RdItems[i].kind != RK_IMAGE && RdItems[i].kind != RK_HR) {
       if (RdItems[i].kind == RK_BR) { i++; if (!firstline) {} continue; }
@@ -844,7 +906,7 @@ void rdsavepos () {
   fs::FS *fs = resolvepath(rdpospath().c_str(), sub);
   if (!fs) return;
   File f = fs->open(sub, "w", true);
-  if (f) { f.printf("%d %u %d %s\n", RdChapter, item, RdFontSize, RdFamily.c_str()); f.close(); }
+  if (f) { f.printf("%d %u\n", RdChapter, item); f.close(); }
 }
 
 bool rdloadchapter (int ch) {
@@ -904,11 +966,8 @@ object *fn_bookopen (object *args, object *env) {
     File f = pfs->open(psub, "r");
     if (f) {
       String line = f.readStringUntil('\n'); f.close();
-      int c = 0, sz = 0; unsigned it = 0; char fam[64] = "";
-      int got = sscanf(line.c_str(), "%d %u %d %63s", &c, &it, &sz, fam);
-      if (got >= 2 && c >= 0 && c < (int)RdSpine.size()) { ch = c; item = it; }
-      if (got >= 3 && sz >= 12 && sz <= 60) RdFontSize = sz;
-      if (got >= 4 && String(fam) != RdFamily) rdloadfamily(fam);
+      int c = 0; unsigned it = 0;
+      if (sscanf(line.c_str(), "%d %u", &c, &it) == 2 && c >= 0 && c < (int)RdSpine.size()) { ch = c; item = it; }
     }
   }
   tft.setRotation(0);
@@ -1010,6 +1069,7 @@ object *fn_bookfontsize (object *args, object *env) {
     int s = checkinteger(first(args));
     if (s < 12 || s > 60) error("font size must be 12-60", first(args));
     RdFontSize = s;
+    rdsavesettings();
     if (rdhasbook()) rdrelayout();
   }
   return number(RdFontSize);
@@ -1022,6 +1082,7 @@ object *fn_bookfont (object *args, object *env) {
     cstring(first(args), fam, sizeof(fam));
     if (!RdFT && FT_Init_FreeType(&RdFT)) error2("FreeType failed to start");
     if (!rdloadfamily(fam)) error("font family not found in /sd/fonts or /fonts", first(args));
+    rdsavesettings();
     if (rdhasbook()) rdrelayout();
   }
   rdensurefonts();
@@ -1108,9 +1169,10 @@ const char doc_booktoc[] = "(book-toc)\n"
 const char doc_bookinfo[] = "(book-info)\n"
 "Returns details of the open book as an association list, or nil if none is open.";
 const char doc_bookfontsize[] = "(book-font-size [pixels])\n"
-"Sets the body text size (12-60, default 26) and re-lays out the book. Returns the size.";
+"Sets the text size for all books (12-60, default 28) and re-lays out the page. Returns the size.";
 const char doc_bookfont[] = "(book-font [family])\n"
-"Sets the font family, e.g. \"Caladea\", from /sd/fonts or /fonts. Returns the current family.";
+"Sets the font family for all books, e.g. \"Caladea\", from /sd/fonts or /fonts. The Medium weight\n"
+"is used when the family has one. Code uses the first font named *Mono*. Returns the current family.";
 const char doc_bookfonts[] = "(book-fonts)\n"
 "Lists the font families available to the reader.";
 const char doc_bookclose[] = "(book-close)\n"

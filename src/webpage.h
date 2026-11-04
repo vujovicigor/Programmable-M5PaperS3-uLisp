@@ -123,7 +123,7 @@ const char WEBPAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
   <section class="view" id="editor">
     <div id="files">
       <div class="roots"><button class="b on" data-root="/">Flash</button><button class="b" data-root="/sd" id="sdroot">SD card</button></div>
-      <div class="path"><span id="curdir" class="mono">/</span><span><button class="b" id="newdir" title="New folder" style="padding:2px 8px">+ folder</button></span></div>
+      <div class="path"><span id="curdir" class="mono">/</span><span><button class="b" id="upload" title="Upload files from this computer (books, fonts, programs)" style="padding:2px 8px">Upload</button> <button class="b" id="newdir" title="New folder" style="padding:2px 8px">+ folder</button><input type="file" id="upfiles" multiple hidden></span></div>
       <div id="filelist"></div>
       <div class="usage" id="usage"></div>
     </div>
@@ -181,7 +181,7 @@ const char WEBPAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
   <h3>Files</h3>
   <p>Paths starting with <code>/sd/</code> are on the SD card, and anything else is on the internal flash (about 3 MB). The <b>Editor &amp; Files</b> tab saves and opens programs. <b>Save &amp; load</b> runs a file on the device with <code>(load "/file.lisp")</code>, so its definitions stay available in the REPL.</p>
   <h3>Reading EPUB books</h3>
-  <p>Put <code>.epub</code> files in <code>/sd/books</code> and fonts (<code>.ttf</code> or <code>.otf</code> with TrueType outlines, named like <code>Family-Regular.ttf</code>, <code>Family-Bold.ttf</code>, <code>Family-Italic.ttf</code>) in <code>/sd/fonts</code>. Run <code>(reader)</code> for the library, or <code>(reader "/sd/books/name.epub")</code>. While reading, tap the right side for the next page, the left third for the previous page, and the top strip for the menu (contents, text size, font, library, exit). The reader remembers your page in each book. It is written in Lisp on top of the <code>book-</code> functions, so you can change it: see <code>patched/library.lisp</code> in the project.</p>
+  <p>Put <code>.epub</code> files in <code>/sd/books</code> (use <b>Upload</b> in the Editor &amp; Files tab) and fonts (<code>.ttf</code> or <code>.otf</code> with TrueType outlines, named like <code>Family-Regular.ttf</code>, <code>Family-Bold.ttf</code>, <code>Family-Italic.ttf</code>) in <code>/sd/fonts</code>. Run <code>(reader)</code> for the library, or <code>(reader "/sd/books/name.epub")</code>. While reading, tap the right side for the next page, the left third for the previous page, and the top strip for the menu (contents, text size, font, library, exit). The reader remembers your page in each book. It is written in Lisp on top of the <code>book-</code> functions, so you can change it: see <code>patched/library.lisp</code> in the project.</p>
   <h3>Things to know</h3>
   <p>The browser and the USB serial REPL share one interpreter. A web request is answered only while the serial REPL is idle, and a long-running program blocks everything until it finishes. To stop a runaway program, press the reset button, or send <code>~</code> over the serial monitor. Definitions live in RAM until reset; keep programs in files and <code>load</code> them.</p>
 </template>
@@ -578,6 +578,18 @@ document.querySelectorAll('[data-root]').forEach(b => b.onclick = () => {
   document.querySelectorAll('[data-root]').forEach(x => x.classList.toggle('on', x === b));
   refreshFiles();
 });
+$('#upload').onclick = () => $('#upfiles').click();
+$('#upfiles').onchange = async e => {
+  const files = [...e.target.files]; e.target.value = '';
+  for (const [i, f] of files.entries()) {
+    setMsg(`Uploading ${f.name} (${i + 1} of ${files.length}, ${(f.size / 1024).toFixed(0)} KB)…`);
+    const fd = new FormData(); fd.append('file', f, f.name);
+    const r = await fetch('/api/upload?dir=' + encodeURIComponent(cwd), { method:'POST', body:fd });
+    if (!r.ok) { setMsg(`Upload of ${f.name} failed: ` + await r.text(), true); refreshFiles(); return; }
+  }
+  setMsg(`Uploaded ${files.length} file${files.length === 1 ? '' : 's'} to ${cwd}`);
+  refreshFiles();
+};
 $('#newdir').onclick = async () => {
   const n = prompt('New folder name'); if (!n) return;
   const r = await fetch('/api/mkdir?path=' + encodeURIComponent(join(cwd, n)), { method:'POST' });

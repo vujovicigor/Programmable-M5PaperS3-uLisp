@@ -49,7 +49,8 @@ Stop a runaway web program by sending `~` over serial, or press reset.
 
 ## Web API
 `POST /eval` (text/plain Lisp source, returns the output) · `GET /api/info` · `GET /api/docs` ·
-`GET /api/ls?path=` · `GET|POST|DELETE /api/file?path=` · `POST /api/mkdir?path=`.
+`GET /api/ls?path=` · `GET|POST|DELETE /api/file?path=` (text) · `POST /api/upload?dir=` (binary, multipart) ·
+`POST /api/mkdir?path=` · `GET /api/screen` (BMP screenshot).
 Paths under `/sd/` are on the SD card, everything else is in internal flash (LittleFS, about 3.4 MB).
 Examples live in `src/webpage.h` as `<script type="text/plain" class="example">` blocks.
 
@@ -69,7 +70,13 @@ Put `.epub` files in `/sd/books` and fonts in `/sd/fonts` (or `/fonts` on flash)
 outlines, which most `.ttf` and many `.otf` files do, and be named `Family-Regular`, `Family-Bold`,
 `Family-Italic` and `Family-BoldItalic`. Then run `(reader)`. While reading, tap the right side for the
 next page, the left third for the previous page, and the top strip for the menu. The menu has contents,
-text size, font, library and exit. Your position is saved next to each book as `<book>.epub.ulisp`.
+text size, font, library and exit. Your position is saved next to each book as `<book>.epub.ulisp`;
+font and size are shared by all books and saved in `/reader.cfg` on flash. A family's Medium weight is used
+when it has one, because heavier strokes read better on e-ink; the default is Crimson Pro at 28 px. Code uses
+the first font with `Mono` in its name; this setup uses DejaVu Sans Mono in `/sd/fonts`.
+
+Upload books and fonts from the web IDE: **Editor & Files** → open the folder → **Upload**
+(`POST /api/upload?dir=/sd/books`, multipart, binary-safe).
 
 | Function | |
 |---|---|
