@@ -31,6 +31,7 @@ const char LispLibrary[] = "";
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
+#include <ArduinoOTA.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <FS.h>

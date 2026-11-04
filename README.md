@@ -20,6 +20,10 @@ and a browser IDE served over WiFi with a REPL, an editor, a file manager, docs 
    ```
    The board saves the network and reconnects on every boot. The address appears on serial and along the bottom of the screen.
 4. Browse to `http://<board-ip>/` or `http://ulisp.local/`.
+5. After the first USB flash you can update over WiFi: `pio run -e ota -t upload`. The board must be idle
+   at the uLisp prompt (no program running); it shows "Updating firmware over WiFi..." and restarts.
+   If `ulisp.local` doesn't resolve, set `upload_port` in `[env:ota]` to the board's IP address.
+   WiFi updates have no password, but anyone on your network can already run code through the web REPL.
 
 ## Project layout
 - `patched/ulisp-esp.ino`: upstream uLisp ESP 4.9a ([technoblogy/ulisp-esp](https://github.com/technoblogy/ulisp-esp)
@@ -32,7 +36,8 @@ and a browser IDE served over WiFi with a REPL, an editor, a file manager, docs 
   so this script adds the forward declarations instead.
 - `tools/send.py`: sends expressions over serial, e.g. `~/.platformio/penv/bin/python tools/send.py "" "(+ 1 2)"`
 
-The platform is pinned to pioarduino 55.03.312. The upload speed is 115200, because faster uploads proved unreliable.
+The platform is pinned to pioarduino 55.03.312. The USB upload speed is 115200. If USB uploads fail with "Serial data stream stopped", connect the board
+directly to the computer with a different cable; a flaky USB link caused this before. Then power-cycle the board.
 
 ## WiFi / web REPL
 Run `(wifi-connect "ssid" "password")` once over serial; the ESP32 saves the network and reconnects on boot.

@@ -184,6 +184,32 @@ void webinit () {
   WiFi.begin();  // uses credentials saved by a previous (wifi-connect ...)
 }
 
+// Firmware updates over WiFi: pio run -e ota -t upload
+void otastart () {
+  ArduinoOTA.setHostname("ulisp");
+  ArduinoOTA.setMdnsEnabled(false);       // mDNS is already running; just advertise OTA
+  MDNS.enableArduino(3232, false);
+  ArduinoOTA.onStart([]() {
+    Serial.println("\r\nOTA update starting");
+    #if defined(gfxsupport)
+    tft.setEpdMode(epd_mode_t::epd_fastest);
+    tft.fillRect(0, tft.height() - 24, tft.width(), 24, TFT_WHITE);
+    tft.setFont(&fonts::Font0); tft.setTextSize(2);
+    tft.setCursor(8, tft.height() - 20);
+    tft.print("Updating firmware over WiFi...");
+    #endif
+  });
+  ArduinoOTA.onEnd([]() { Serial.println("OTA update done, restarting"); });
+  ArduinoOTA.onError([](ota_error_t e) {
+    Serial.printf("OTA error %u\r\n", e);
+    #if defined(gfxsupport)
+    tft.setEpdMode(epd_mode_t::epd_quality);
+    tft.fillRect(0, tft.height() - 24, tft.width(), 24, TFT_WHITE);
+    #endif
+  });
+  ArduinoOTA.begin();
+}
+
 void webstart () {
   webserver.on("/", HTTP_GET, []() {
     webserver.send_P(200, "text/html", WEBPAGE);
@@ -207,6 +233,7 @@ void webstart () {
   webserver.begin();
   MDNS.begin("ulisp");
   MDNS.addService("http", "tcp", 80);
+  otastart();
   WebStarted = true;
   String msg = "Web REPL: http://" + WiFi.localIP().toString() + "/  (http://ulisp.local/)";
   webshowstatus(msg.c_str());
@@ -222,4 +249,5 @@ void webpoll () {
     return;
   }
   webserver.handleClient();
+  ArduinoOTA.handle();
 }
