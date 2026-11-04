@@ -174,6 +174,7 @@ const char WEBPAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
     <tr><td>Clock</td><td><code>rtc-time set-rtc get-time</code></td></tr>
     <tr><td>Files</td><td><code>list-files read-file write-file delete-file make-directory file-exists sd-card-p load save-image load-image</code></td></tr>
     <tr><td>Network</td><td><code>http-get http-post http-status wifi-rssi wifi-localip wifi-connect</code></td></tr>
+    <tr><td>JSON</td><td><code>json-parse json-string json-get http-get-json</code></td></tr>
   </table>
   <h3>Files</h3>
   <p>Paths starting with <code>/sd/</code> are on the SD card, and anything else is on the internal flash (about 3 MB). The <b>Editor &amp; Files</b> tab saves and opens programs. <b>Save &amp; load</b> runs a file on the device with <code>(load "/file.lisp")</code>, so its definitions stay available in the REPL.</p>
@@ -353,6 +354,43 @@ const char WEBPAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
     (draw-text s 480 230 1)
     (set-font 0))
   (list (http-status) s))
+</script>
+<script type="text/plain" class="example" data-title="JSON basics" data-desc="Parse JSON into lists, pick values out with json-get, and turn Lisp data back into JSON.">
+(defvar data
+  (json-parse "{\"name\": \"PaperS3\", \"size\": [960, 540], \"eink\": true, \"price\": null}"))
+
+data                          ; objects become (("key" . value) ...)
+(json-get data "size" 0)      ; path of keys and list indexes
+(json-string data)
+(json-string '(("list" 1 2 3) ("nested" ("a" . 1) ("b" . 2.5))) t)
+</script>
+<script type="text/plain" class="example" data-title="Weather" data-desc="Current weather from open-meteo.com (no API key) with http-get-json, shown on the screen. Edit the coordinates for your location.">
+; Change these to your location (these are Berlin).
+(defvar *lat* "52.52")
+(defvar *lon* "13.41")
+
+(defun fetch-weather ()
+  (http-get-json
+    (format nil "https://api.open-meteo.com/v1/forecast?latitude=~a&longitude=~a&current=temperature_2m,relative_humidity_2m,wind_speed_10m&timezone=auto"
+            *lat* *lon*)))
+
+(let* ((w (fetch-weather))
+       (temp (json-get w "current" "temperature_2m"))
+       (hum (json-get w "current" "relative_humidity_2m"))
+       (wind (json-get w "current" "wind_speed_10m"))
+       (updated (json-get w "current" "time")))
+  (with-batch
+    (clear-screen)
+    (set-font 3)
+    (draw-text "Weather" 480 40 1)
+    (set-font 12)
+    (draw-text (format nil "~a C" temp) 480 140 1)
+    (set-font 3)
+    (draw-text (format nil "humidity ~a%    wind ~a km/h" hum wind) 480 300 1)
+    (set-font 2)
+    (draw-text (format nil "updated ~a" updated) 480 420 1)
+    (set-font 0))
+  (list temp hum wind))
 </script>
 <script type="text/plain" class="example" data-title="Files" data-desc="Writes a program to flash, lists the files, then loads and calls it.">
 (write-file "/hello.lisp"

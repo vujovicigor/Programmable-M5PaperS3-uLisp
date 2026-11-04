@@ -32,7 +32,7 @@ and a browser IDE served over WiFi with a REPL, an editor, a file manager, docs 
   so this script adds the forward declarations instead.
 - `tools/send.py`: sends expressions over serial, e.g. `~/.platformio/penv/bin/python tools/send.py "" "(+ 1 2)"`
 
-The platform is pinned to pioarduino 55.03.312. The upload speed is 230400, because faster uploads proved unreliable.
+The platform is pinned to pioarduino 55.03.312. The upload speed is 115200, because faster uploads proved unreliable.
 
 ## WiFi / web REPL
 Run `(wifi-connect "ssid" "password")` once over serial; the ESP32 saves the network and reconnects on boot.
@@ -55,6 +55,7 @@ Examples live in `src/webpage.h` as `<script type="text/plain" class="example">`
 | `(list-files [dir])`, `(read-file p)`, `(write-file p str [append])`, `(delete-file p)`, `(make-directory p)`, `(file-exists p)`, `(sd-card-p)` | files |
 | `(load path)` | evaluate a Lisp file |
 | `(http-get url)`, `(http-post url body [type])`, `(http-status)`, `(wifi-rssi)` | network (https OK, certificates not verified) |
+| `(json-parse str)`, `(json-string data [pretty])`, `(json-get data key-or-index ...)`, `(http-get-json url)` | JSON: objects become `(("key" . value) ...)`, arrays become lists; `true` → `t`, `false`/`null` → `nil` |
 
 ## Display library (PaperS3 additions)
 Colours are RGB565 numbers; the panel shows 16 grays. `0` is black, `#xffff` is white.

@@ -600,6 +600,334 @@ object *fn_wifirssi (object *args, object *env) {
   return number(WiFi.RSSI());
 }
 
+// ---- JSON ------------------------------------------------------------------------
+// Objects become association lists with string keys, arrays become lists,
+// true -> t, false and null -> nil. Allocation in C never triggers GC
+// (uLisp only collects inside eval), so partial results need no protection.
+
+#define JSONMAXDEPTH 64
+
+const char *JsonSrc = "";
+size_t JsonLen = 0, JsonPos = 0;
+String JsonBuf;   // holds input or output text outside Lisp memory
+
+void jsonerror (const char *msg) {
+  char buf[80];
+  snprintf(buf, sizeof(buf), "JSON %s at offset %u", msg, (unsigned)JsonPos);
+  JsonBuf = "";
+  error2(buf);
+}
+
+void jsonws () {
+  while (JsonPos < JsonLen) {
+    char c = JsonSrc[JsonPos];
+    if (c == ' ' || c == '\n' || c == '\r' || c == '\t') JsonPos++; else break;
+  }
+}
+
+char jsonpeek () { return JsonPos < JsonLen ? JsonSrc[JsonPos] : 0; }
+
+void jsonexpect (char c, const char *msg) {
+  jsonws();
+  if (jsonpeek() != c) jsonerror(msg);
+  JsonPos++;
+}
+
+int jsonhex4 () {
+  if (JsonPos + 4 > JsonLen) jsonerror("bad \\u escape");
+  int v = 0;
+  for (int i = 0; i < 4; i++) {
+    char c = JsonSrc[JsonPos++];
+    v <<= 4;
+    if (c >= '0' && c <= '9') v |= c - '0';
+    else if (c >= 'a' && c <= 'f') v |= c - 'a' + 10;
+    else if (c >= 'A' && c <= 'F') v |= c - 'A' + 10;
+    else jsonerror("bad \\u escape");
+  }
+  return v;
+}
+
+void jsonutf8 (uint32_t cp, object **tail) {
+  if (cp == 0) return;  // uLisp strings can't hold NUL
+  if (cp < 0x80) buildstring(cp, tail);
+  else if (cp < 0x800) { buildstring(0xC0 | (cp >> 6), tail); buildstring(0x80 | (cp & 0x3F), tail); }
+  else if (cp < 0x10000) {
+    buildstring(0xE0 | (cp >> 12), tail); buildstring(0x80 | ((cp >> 6) & 0x3F), tail);
+    buildstring(0x80 | (cp & 0x3F), tail);
+  } else {
+    buildstring(0xF0 | (cp >> 18), tail); buildstring(0x80 | ((cp >> 12) & 0x3F), tail);
+    buildstring(0x80 | ((cp >> 6) & 0x3F), tail); buildstring(0x80 | (cp & 0x3F), tail);
+  }
+}
+
+// Called with JsonPos just after the opening quote
+object *jsonstring () {
+  object *obj = newstring();
+  object *tail = obj;
+  for (;;) {
+    if (JsonPos >= JsonLen) jsonerror("unterminated string");
+    char c = JsonSrc[JsonPos++];
+    if (c == '"') return obj;
+    if (c != '\\') { if (c != 0) buildstring(c, &tail); continue; }
+    if (JsonPos >= JsonLen) jsonerror("unterminated string");
+    char e = JsonSrc[JsonPos++];
+    switch (e) {
+      case '"': case '\\': case '/': buildstring(e, &tail); break;
+      case 'n': buildstring('\n', &tail); break;
+      case 't': buildstring('\t', &tail); break;
+      case 'r': buildstring('\r', &tail); break;
+      case 'b': buildstring('\b', &tail); break;
+      case 'f': buildstring('\f', &tail); break;
+      case 'u': {
+        uint32_t cp = jsonhex4();
+        if (cp >= 0xD800 && cp <= 0xDBFF && JsonPos + 6 <= JsonLen &&
+            JsonSrc[JsonPos] == '\\' && JsonSrc[JsonPos+1] == 'u') {
+          JsonPos += 2;
+          uint32_t lo = jsonhex4();
+          if (lo >= 0xDC00 && lo <= 0xDFFF) cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+          else { jsonutf8(0xFFFD, &tail); cp = lo; }
+        }
+        jsonutf8(cp, &tail);
+        break;
+      }
+      default: jsonerror("bad escape");
+    }
+  }
+}
+
+object *jsonnumber () {
+  size_t start = JsonPos;
+  bool isfloat = false;
+  if (jsonpeek() == '-') JsonPos++;
+  if (!isdigit((unsigned char)jsonpeek())) jsonerror("bad number");
+  while (JsonPos < JsonLen) {
+    char c = JsonSrc[JsonPos];
+    if (isdigit((unsigned char)c)) JsonPos++;
+    else if (c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-') { isfloat = true; JsonPos++; }
+    else break;
+  }
+  char buf[40];
+  size_t n = JsonPos - start;
+  if (n >= sizeof(buf)) jsonerror("number too long");
+  memcpy(buf, JsonSrc + start, n); buf[n] = 0;
+  char *end;
+  if (!isfloat) {
+    errno = 0;
+    long long v = strtoll(buf, &end, 10);
+    if (*end == 0 && errno == 0 && v >= INT32_MIN && v <= INT32_MAX) return number((int)v);
+  }
+  double d = strtod(buf, &end);
+  if (*end != 0) jsonerror("bad number");
+  return makefloat((float)d);
+}
+
+object *jsonvalue (int depth) {
+  if (depth > JSONMAXDEPTH) jsonerror("nested too deeply");
+  jsonws();
+  char c = jsonpeek();
+  if (c == '{') {
+    JsonPos++;
+    object *head = cons(nil, NULL), *tail = head;
+    jsonws();
+    if (jsonpeek() == '}') { JsonPos++; return nil; }
+    for (;;) {
+      jsonexpect('"', "expected string key");
+      object *pair = cons(nil, nil);
+      cdr(tail) = cons(pair, NULL); tail = cdr(tail);
+      car(pair) = jsonstring();
+      jsonexpect(':', "expected ':'");
+      cdr(pair) = jsonvalue(depth + 1);
+      jsonws();
+      char d = jsonpeek();
+      if (d == ',') { JsonPos++; continue; }
+      if (d == '}') { JsonPos++; return cdr(head); }
+      jsonerror("expected ',' or '}'");
+    }
+  }
+  if (c == '[') {
+    JsonPos++;
+    object *head = cons(nil, NULL), *tail = head;
+    jsonws();
+    if (jsonpeek() == ']') { JsonPos++; return nil; }
+    for (;;) {
+      cdr(tail) = cons(nil, NULL); tail = cdr(tail);
+      car(tail) = jsonvalue(depth + 1);
+      jsonws();
+      char d = jsonpeek();
+      if (d == ',') { JsonPos++; continue; }
+      if (d == ']') { JsonPos++; return cdr(head); }
+      jsonerror("expected ',' or ']'");
+    }
+  }
+  if (c == '"') { JsonPos++; return jsonstring(); }
+  if (c == '-' || isdigit((unsigned char)c)) return jsonnumber();
+  if (JsonLen - JsonPos >= 4 && strncmp(JsonSrc + JsonPos, "true", 4) == 0) { JsonPos += 4; return tee; }
+  if (JsonLen - JsonPos >= 5 && strncmp(JsonSrc + JsonPos, "false", 5) == 0) { JsonPos += 5; return nil; }
+  if (JsonLen - JsonPos >= 4 && strncmp(JsonSrc + JsonPos, "null", 4) == 0) { JsonPos += 4; return nil; }
+  jsonerror(c ? "unexpected character" : "unexpected end");
+  return nil;
+}
+
+// Parses the text in JsonBuf, then frees it
+object *jsonparsebuf () {
+  JsonSrc = JsonBuf.c_str(); JsonLen = JsonBuf.length(); JsonPos = 0;
+  object *result = jsonvalue(0);
+  jsonws();
+  if (JsonPos < JsonLen) jsonerror("unexpected data after value");
+  JsonBuf = ""; JsonSrc = ""; JsonLen = 0;
+  return result;
+}
+
+// Lisp string or symbol name -> Arduino String (raw characters)
+String KeyAcc;
+void keyacc (char c) { KeyAcc += c; }
+String lispname (object *obj) {
+  KeyAcc = "";
+  flags_t saved = Flags;
+  clrflag(PRINTREADABLY);
+  if (stringp(obj)) plispstr(obj->name, keyacc);
+  else if (symbolp(obj)) psymbol(obj->name, keyacc);
+  Flags = saved;
+  String s = KeyAcc; KeyAcc = "";
+  return s;
+}
+
+void jsonquote (const String &s) {
+  JsonBuf += '"';
+  for (unsigned int i = 0; i < s.length(); i++) {
+    char c = s[i];
+    switch (c) {
+      case '"': JsonBuf += "\\\""; break;
+      case '\\': JsonBuf += "\\\\"; break;
+      case '\n': JsonBuf += "\\n"; break;
+      case '\r': JsonBuf += "\\r"; break;
+      case '\t': JsonBuf += "\\t"; break;
+      default:
+        if ((uint8_t)c < 0x20) { char b[8]; snprintf(b, sizeof(b), "\\u%04x", c); JsonBuf += b; }
+        else JsonBuf += c;
+    }
+  }
+  JsonBuf += '"';
+}
+
+bool jsonobjectp (object *obj) {
+  for (; consp(obj); obj = cdr(obj)) {
+    object *e = car(obj);
+    if (!consp(e) || !(stringp(car(e)) || symbolp(car(e)))) return false;
+  }
+  return true;
+}
+
+void jsonnewline (bool pretty, int depth) {
+  if (!pretty) return;
+  JsonBuf += '\n';
+  for (int i = 0; i < depth; i++) JsonBuf += "  ";
+}
+
+void jsonwrite (object *obj, bool pretty, int depth) {
+  if (depth > JSONMAXDEPTH) { JsonBuf = ""; error2("data nested too deeply for JSON"); }
+  if (obj == nil) { JsonBuf += "null"; return; }
+  if (symbolp(obj) && obj->name == sym(TEE)) { JsonBuf += "true"; return; }
+  if (integerp(obj)) { JsonBuf += String(obj->integer); return; }
+  if (floatp(obj)) {
+    float f = obj->single_float;
+    if (isnan(f) || isinf(f)) { JsonBuf += "null"; return; }
+    char b[24]; snprintf(b, sizeof(b), "%.7g", f); JsonBuf += b; return;
+  }
+  if (stringp(obj) || symbolp(obj)) { jsonquote(lispname(obj)); return; }
+  if (characterp(obj)) { String s; s += (char)obj->chars; jsonquote(s); return; }
+  if (consp(obj)) {
+    bool isobj = jsonobjectp(obj);
+    JsonBuf += isobj ? '{' : '[';
+    bool firstitem = true;
+    for (; consp(obj); obj = cdr(obj)) {
+      if (!firstitem) JsonBuf += ',';
+      firstitem = false;
+      jsonnewline(pretty, depth + 1);
+      if (isobj) {
+        jsonquote(lispname(car(car(obj))));
+        JsonBuf += pretty ? ": " : ":";
+        jsonwrite(cdr(car(obj)), pretty, depth + 1);
+      } else jsonwrite(car(obj), pretty, depth + 1);
+    }
+    jsonnewline(pretty, depth);
+    JsonBuf += isobj ? '}' : ']';
+    return;
+  }
+  JsonBuf = ""; error2("value can't be converted to JSON");
+}
+
+object *fn_jsonparse (object *args, object *env) {
+  (void) env;
+  lisptostracc(first(args));
+  JsonBuf = StrAcc; StrAcc = "";
+  return jsonparsebuf();
+}
+
+// (json-string data [pretty])
+object *fn_jsonstring (object *args, object *env) {
+  (void) env;
+  bool pretty = cdr(args) != NULL && second(args) != nil;
+  JsonBuf = "";
+  jsonwrite(first(args), pretty, 0);
+  object *result = rawstring(JsonBuf.c_str(), JsonBuf.length());
+  JsonBuf = "";
+  return result;
+}
+
+// (json-get data key-or-index ...)
+object *fn_jsonget (object *args, object *env) {
+  (void) env;
+  object *data = first(args);
+  for (object *keys = cdr(args); keys != NULL; keys = cdr(keys)) {
+    object *k = car(keys);
+    if (integerp(k)) {
+      int n = k->integer;
+      if (n < 0) return nil;
+      while (n-- > 0 && consp(data)) data = cdr(data);
+      if (!consp(data)) return nil;
+      data = car(data);
+    } else if (stringp(k) || symbolp(k)) {
+      String want = lispname(k);
+      object *found = NULL;
+      for (object *p = data; consp(p); p = cdr(p)) {
+        object *e = car(p);
+        if (consp(e) && (stringp(car(e)) || symbolp(car(e))) && lispname(car(e)) == want) { found = e; break; }
+      }
+      if (!found) return nil;
+      data = cdr(found);
+    } else error("key must be a string or an index", k);
+  }
+  return data;
+}
+
+object *fn_httpgetjson (object *args, object *env) {
+  (void) env;
+  if (WiFi.status() != WL_CONNECTED) error2("not connected to WiFi");
+  char url[256];
+  if (!stringp(first(args))) error(notastring, first(args));
+  cstring(first(args), url, sizeof(url));
+  JsonBuf = "";
+  bool ok = httprequest(url, "GET", NULL, NULL, JsonBuf);
+  if (!ok) { String msg = JsonBuf; JsonBuf = ""; error2(msg.c_str()); }
+  if (LastHttpStatus >= 400) {
+    char msg[48]; snprintf(msg, sizeof(msg), "HTTP status %d", LastHttpStatus);
+    JsonBuf = ""; error2(msg);
+  }
+  return jsonparsebuf();
+}
+
+const char doc_jsonparse[] = "(json-parse string)\n"
+"Parses JSON. Objects become association lists with string keys, arrays become lists,\n"
+"true becomes t, and false and null become nil.";
+const char doc_jsonstring[] = "(json-string data [pretty])\n"
+"Converts Lisp data to a JSON string. A list of (key . value) pairs becomes an object,\n"
+"any other list an array, nil null, and t true. With pretty true, the output is indented.";
+const char doc_jsonget[] = "(json-get data key-or-index*)\n"
+"Follows a path into parsed JSON, e.g. (json-get data \"items\" 0 \"name\"). Returns nil if the path is missing.";
+const char doc_httpgetjson[] = "(http-get-json url)\n"
+"Fetches url and parses the response as JSON, using less memory than (json-parse (http-get url)).";
+
 const char doc_listfiles[] = "(list-files [dir])\n"
 "Lists a directory as strings; subdirectories end in /. \"/\" is internal flash, \"/sd\" the SD card.";
 const char doc_readfile[] = "(read-file path)\n"
@@ -707,6 +1035,10 @@ const tbl_entry_t lookup_table2[] = {
   { "http-post", fn_httppost, 0223, doc_httppost },
   { "http-status", fn_httpstatus, 0200, doc_httpstatus },
   { "wifi-rssi", fn_wifirssi, 0200, doc_wifirssi },
+  { "json-parse", fn_jsonparse, 0211, doc_jsonparse },
+  { "json-string", fn_jsonstring, 0212, doc_jsonstring },
+  { "json-get", fn_jsonget, 0217, doc_jsonget },
+  { "http-get-json", fn_httpgetjson, 0211, doc_httpgetjson },
 };
 
 tbl_entry_t *tables[] = {lookup_table, lookup_table2};
