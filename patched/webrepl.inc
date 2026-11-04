@@ -240,6 +240,22 @@ void webshowstatus (const char *msg) {
   #endif
 }
 
+// Runs /autorun.lisp once at boot. Hold a finger on the screen while it starts to skip it.
+void autorunfile () {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  if (!flashmount() || !LittleFS.exists("/autorun.lisp")) return;
+  unsigned long start = millis();
+  while (millis() - start < 600) {
+    M5.update();
+    if (M5.Touch.getDetail().isPressed()) { Serial.println("\r\nAutorun skipped (screen touched)"); return; }
+    delay(20);
+  }
+  Serial.println("\r\nRunning /autorun.lisp (hold a finger on the screen at startup to skip)");
+  fn_load(cons(lispstring((char *)"/autorun.lisp"), NULL), NULL);
+}
+
 void webinit () {
   flashmount();
   WiFi.mode(WIFI_STA);
@@ -273,7 +289,31 @@ void otastart () {
   ArduinoOTA.begin();
 }
 
+// Light sleep: switch WiFi off, sleep, then reconnect and restart the web services
+int paperlightsleep (uint64_t us, bool touch) {
+  bool wifi = WiFi.getMode() != WIFI_OFF;
+  if (WebStarted) { webserver.stop(); ArduinoOTA.end(); MDNS.end(); WebStarted = false; }
+  if (wifi) { WiFi.disconnect(true); WiFi.mode(WIFI_OFF); }
+  Serial.flush();
+  tft.waitDisplay();
+  M5.Power.lightSleep(us, touch);
+  int cause = esp_sleep_get_wakeup_cause();
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+  if (wifi) { WiFi.mode(WIFI_STA); WiFi.begin(); }   // webpoll restarts the web server once connected
+  return cause;
+}
+
 void webstart () {
+  static bool handlers = false;
+  if (handlers) {   // restarting after light sleep
+    webserver.begin();
+    MDNS.begin("ulisp");
+    MDNS.addService("http", "tcp", 80);
+    otastart();
+    WebStarted = true;
+    return;
+  }
+  handlers = true;
   webserver.on("/", HTTP_GET, []() {
     webserver.send_P(200, "text/html", WEBPAGE);
   });

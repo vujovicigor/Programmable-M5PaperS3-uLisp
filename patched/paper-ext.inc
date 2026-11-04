@@ -527,6 +527,7 @@ object *fn_setrtc (object *args, object *env) {
 // ---- Network -------------------------------------------------------------------
 
 int LastHttpStatus = 0;
+object *fn_wifiwait (object *args, object *env);   // defined with the power functions
 
 // Performs a request; returns true with the body in out, or false with a message in out
 bool httprequest (const char *url, const char *method, const String *body, const char *ctype, String &out) {
@@ -563,7 +564,7 @@ object *httpresult (bool ok, String &out) {
 
 object *fn_httpget (object *args, object *env) {
   (void) env;
-  if (WiFi.status() != WL_CONNECTED) error2("not connected to WiFi");
+  if (fn_wifiwait(NULL, NULL) == nil) error2("not connected to WiFi");
   char url[256];
   if (!stringp(first(args))) error(notastring, first(args));
   cstring(first(args), url, sizeof(url));
@@ -575,7 +576,7 @@ object *fn_httpget (object *args, object *env) {
 // (http-post url body [content-type])
 object *fn_httppost (object *args, object *env) {
   (void) env;
-  if (WiFi.status() != WL_CONNECTED) error2("not connected to WiFi");
+  if (fn_wifiwait(NULL, NULL) == nil) error2("not connected to WiFi");
   char url[256], ctype[64];
   if (!stringp(first(args))) error(notastring, first(args));
   cstring(first(args), url, sizeof(url));
@@ -903,7 +904,7 @@ object *fn_jsonget (object *args, object *env) {
 
 object *fn_httpgetjson (object *args, object *env) {
   (void) env;
-  if (WiFi.status() != WL_CONNECTED) error2("not connected to WiFi");
+  if (fn_wifiwait(NULL, NULL) == nil) error2("not connected to WiFi");
   char url[256];
   if (!stringp(first(args))) error(notastring, first(args));
   cstring(first(args), url, sizeof(url));
@@ -929,6 +930,93 @@ const char doc_httpgetjson[] = "(http-get-json url)\n"
 "Fetches url and parses the response as JSON, using less memory than (json-parse (http-get url)).";
 
 #include "reader.inc"
+
+// ---- Power: sleep modes, wake reason, autorun --------------------------------------
+
+const char *WakeReason = "power-on";   // set once at boot by initwake()
+
+void initwake () {
+  esp_reset_reason_t r = esp_reset_reason();
+  bool alarm = M5.Rtc.isEnabled() && M5.Rtc.getIRQstatus();
+  if (M5.Rtc.isEnabled()) { M5.Rtc.disableIRQ(); M5.Rtc.clearIRQ(); }
+  if (alarm) WakeReason = "alarm";
+  else if (r == ESP_RST_DEEPSLEEP) WakeReason = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER ? "timer" : "deep-sleep";
+  else if (r == ESP_RST_SW) WakeReason = "restart";
+  else if (r == ESP_RST_EXT) WakeReason = "reset";
+  else if (r == ESP_RST_PANIC || r == ESP_RST_INT_WDT || r == ESP_RST_TASK_WDT || r == ESP_RST_WDT) WakeReason = "crash";
+  else if (r == ESP_RST_BROWNOUT) WakeReason = "brownout";
+  else WakeReason = "power-on";
+}
+
+object *fn_wakereason (object *args, object *env) {
+  (void) args, (void) env;
+  return internlong((char *)WakeReason);
+}
+
+uint64_t sleepmicros (object *arg) {
+  if (arg == nil) return M5.Power.sleep_no_timer;
+  float secs = integerp(arg) ? (float)arg->integer : checkintfloat(arg);
+  if (secs <= 0) error("seconds must be positive", arg);
+  return (uint64_t)(secs * 1000000.0f);
+}
+
+// (light-sleep [secs] [touch]) sleeps, keeping the Lisp state; returns timer or touch
+object *fn_lightsleep (object *args, object *env) {
+  (void) env;
+  uint64_t us = args ? sleepmicros(first(args)) : M5.Power.sleep_no_timer;
+  bool touch = !(args && cdr(args) && second(args) == nil);
+  if (us == M5.Power.sleep_no_timer && !touch) error2("nothing would wake the board: give seconds or allow touch");
+  int cause = paperlightsleep(us, touch);
+  return internlong((char *)(cause == ESP_SLEEP_WAKEUP_TIMER ? "timer" : cause == ESP_SLEEP_WAKEUP_GPIO ? "touch" : "other"));
+}
+
+// (deep-sleep [secs]) sleeps and restarts; without secs only reset or the power button wake it
+object *fn_deepsleep (object *args, object *env) {
+  (void) env;
+  uint64_t us = args ? sleepmicros(first(args)) : M5.Power.sleep_no_timer;
+  Serial.flush();
+  tft.waitDisplay();
+  M5.Power.deepSleep(us, false);
+  return nil;
+}
+
+// (power-off [secs]) switches the board off; with secs the clock alarm turns it back on
+object *fn_poweroff (object *args, object *env) {
+  (void) env;
+  int secs = 0;
+  if (args && first(args) != nil) {
+    secs = checkinteger(first(args));
+    if (secs < 1 || secs > 255 * 60) error("seconds must be 1 to 15300 (255 minutes)", first(args));
+  }
+  Serial.flush();
+  tft.waitDisplay();
+  if (secs) M5.Power.timerSleep(secs); else M5.Power.powerOff();
+  error2("the board could not switch off");
+  return nil;
+}
+
+// Waits up to secs (default 15) for WiFi; returns t when connected
+object *fn_wifiwait (object *args, object *env) {
+  (void) env;
+  int secs = args ? checkinteger(first(args)) : 15;
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < (unsigned long)secs * 1000UL) { testescape(); delay(100); }
+  return WiFi.status() == WL_CONNECTED ? tee : nil;
+}
+
+const char doc_wakereason[] = "(wake-reason)\n"
+"Why the board last started: power-on, alarm (clock alarm after power-off), timer (deep-sleep timer),\n"
+"restart, reset, crash or brownout.";
+const char doc_lightsleep[] = "(light-sleep [secs] [touch])\n"
+"Sleeps with the Lisp state kept, until secs pass or the screen is touched (unless touch is nil).\n"
+"WiFi is switched off while sleeping and reconnects afterwards. Returns timer or touch.";
+const char doc_deepsleep[] = "(deep-sleep [secs])\n"
+"Sleeps for secs, then restarts (memory is lost; see /autorun.lisp). Without secs it sleeps until reset.";
+const char doc_poweroff[] = "(power-off [secs])\n"
+"Switches the board off; the screen keeps its image. With secs (up to 15300) the clock alarm switches it\n"
+"back on. On USB power it can't switch off, so it deep-sleeps instead.";
+const char doc_wifiwait[] = "(wifi-wait [secs])\n"
+"Waits up to secs (default 15) for WiFi to connect. Returns t if connected.";
 
 const char doc_listfiles[] = "(list-files [dir])\n"
 "Lists a directory as strings; subdirectories end in /. \"/\" is internal flash, \"/sd\" the SD card.";
@@ -1054,6 +1142,11 @@ const tbl_entry_t lookup_table2[] = {
   { "book-render", fn_bookrender, 0200, doc_bookrender },
   { "draw-ttf", fn_drawttf, 0247, doc_drawttf },
   { "ttf-width", fn_ttfwidth, 0223, doc_ttfwidth },
+  { "wake-reason", fn_wakereason, 0200, doc_wakereason },
+  { "light-sleep", fn_lightsleep, 0202, doc_lightsleep },
+  { "deep-sleep", fn_deepsleep, 0201, doc_deepsleep },
+  { "power-off", fn_poweroff, 0201, doc_poweroff },
+  { "wifi-wait", fn_wifiwait, 0201, doc_wifiwait },
 };
 
 tbl_entry_t *tables[] = {lookup_table, lookup_table2};

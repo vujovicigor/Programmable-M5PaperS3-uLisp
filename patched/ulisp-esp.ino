@@ -521,6 +521,9 @@ extern bool WebCapture, WebIdle;
 void webcapture (char c);
 void webpoll ();
 void webinit ();
+int paperlightsleep (uint64_t us, bool touch);
+void initwake ();
+void autorunfile ();
 
 // Error handling
 
@@ -2522,12 +2525,11 @@ void nonote (int pin) {
 void initsleep () { }
 
 void gosleep () {
-  esp_light_sleep_start();
+  paperlightsleep(~0ULL, true);   // until the screen is touched
 }
 
 void doze (int secs) {
-  esp_sleep_enable_timer_wakeup(secs * 1000000UL);
-  esp_light_sleep_start();
+  paperlightsleep((uint64_t)secs * 1000000ULL, false);
 }
 
 // Prettyprint
@@ -6985,7 +6987,8 @@ void initenv () {
 void initgfx () {
   #if defined(gfxsupport)
     #if defined(M5PAPERS3)
-      M5.begin();
+      { auto cfg = M5.config(); cfg.disable_rtc_irq = false; M5.begin(cfg); }   // keep the alarm flag for wake-reason
+      initwake();
       tft.setRotation(1);             // Landscape, 960x540
       tft.setEpdMode(epd_mode_t::epd_quality);
       tft.fillScreen(TFT_WHITE);
@@ -7022,7 +7025,7 @@ void setup () {
   Serial.begin(9600);
   Serial.setTxTimeoutMs(0);  // never block on output when no host is reading
   int start = millis();
-  while ((millis() - start) < 5000) { if (Serial) break; }
+  while ((millis() - start) < 300) { if (Serial) break; }   // short: on battery nothing is listening
   #if defined(BOARD_HAS_PSRAM)
   if (!psramInit()) { Serial.print("the PSRAM couldn't be initialized"); for(;;); }
   Workspace = (object*) ps_malloc(WORKSPACESIZE*8);
@@ -7106,5 +7109,6 @@ void ulisperror () {
   #if defined(lisplibrary)
   if (!tstflag(LIBRARYLOADED)) { setflag(LIBRARYLOADED); loadfromlibrary(NULL); clrflag(NOECHO); }
   #endif
+  autorunfile();
   client.stop();
 }

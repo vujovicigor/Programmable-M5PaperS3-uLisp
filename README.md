@@ -65,6 +65,19 @@ Examples live in `src/webpage.h` as `<script type="text/plain" class="example">`
 | `(http-get url)`, `(http-post url body [type])`, `(http-status)`, `(wifi-rssi)` | network (https OK, certificates not verified) |
 | `(json-parse str)`, `(json-string data [pretty])`, `(json-get data key-or-index ...)`, `(http-get-json url)` | JSON: objects become `(("key" . value) ...)`, arrays become lists; `true` → `t`, `false`/`null` → `nil` |
 
+## Sleep, power-off and wake-up
+| Function | Power | Wakes on | Afterwards |
+|---|---|---|---|
+| `(light-sleep [secs] [touch])` | low | timer, touch | continues; returns `timer` or `touch`; WiFi reconnects |
+| `(deep-sleep [secs])` | lower | timer | restarts (memory lost) |
+| `(power-off [secs])` | lowest, board off | clock alarm (secs ≤ 15300), power button | restarts; battery only (on USB it deep-sleeps) |
+| `(wake-reason)` | | | `power-on alarm timer restart reset crash brownout` |
+
+uLisp's own `(sleep secs)` now uses `light-sleep`. Touch wake works only from light sleep, because the touch
+controller's interrupt (GPIO48) is not an RTC pin. After a restart, `/autorun.lisp` on flash runs automatically;
+hold a finger on the screen during startup to skip it. `(wifi-wait)` waits for WiFi, and the HTTP functions
+wait for it themselves, for up to 15 s.
+
 ## EPUB reader
 Put `.epub` files in `/sd/books` and fonts in `/sd/fonts` (or `/fonts` on flash). Fonts must have TrueType
 outlines, which most `.ttf` and many `.otf` files do, and be named `Family-Regular`, `Family-Bold`,

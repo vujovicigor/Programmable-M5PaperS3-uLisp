@@ -173,6 +173,7 @@ const char WEBPAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
     <tr><td>Sensors</td><td><code>accel gyro battery</code></td></tr>
     <tr><td>Sound</td><td><code>beep tone volume</code></td></tr>
     <tr><td>Clock</td><td><code>rtc-time set-rtc get-time</code></td></tr>
+    <tr><td>Power</td><td><code>light-sleep deep-sleep power-off wake-reason wifi-wait battery</code></td></tr>
     <tr><td>Files</td><td><code>list-files read-file write-file delete-file make-directory file-exists sd-card-p load save-image load-image</code></td></tr>
     <tr><td>Network</td><td><code>http-get http-post http-status wifi-rssi wifi-localip wifi-connect</code></td></tr>
     <tr><td>JSON</td><td><code>json-parse json-string json-get http-get-json</code></td></tr>
@@ -182,6 +183,18 @@ const char WEBPAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
   <p>Paths starting with <code>/sd/</code> are on the SD card, and anything else is on the internal flash (about 3 MB). The <b>Editor &amp; Files</b> tab saves and opens programs. <b>Save &amp; load</b> runs a file on the device with <code>(load "/file.lisp")</code>, so its definitions stay available in the REPL.</p>
   <h3>Reading EPUB books</h3>
   <p>Put <code>.epub</code> files in <code>/sd/books</code> (use <b>Upload</b> in the Editor &amp; Files tab) and fonts (<code>.ttf</code> or <code>.otf</code> with TrueType outlines, named like <code>Family-Regular.ttf</code>, <code>Family-Bold.ttf</code>, <code>Family-Italic.ttf</code>) in <code>/sd/fonts</code>. Run <code>(reader)</code> for the library, or <code>(reader "/sd/books/name.epub")</code>. While reading, tap the right side for the next page, the left third for the previous page, and the top strip for the menu (contents, text size, font, library, exit). The reader remembers your page in each book. It is written in Lisp on top of the <code>book-</code> functions, so you can change it: see <code>patched/library.lisp</code> in the project.</p>
+  <h3>Sleep and wake-up</h3>
+  <table class="ref">
+    <tr><td><code>(light-sleep [secs] [touch])</code></td><td>Low power; Lisp state kept. Wakes after <i>secs</i> or on a touch, then returns <code>timer</code> or <code>touch</code>. WiFi is off while asleep and reconnects afterwards, so a browser request that started it gets no answer.</td></tr>
+    <tr><td><code>(deep-sleep [secs])</code></td><td>Lower power; restarts after <i>secs</i>, so memory is lost. Touch can't wake it.</td></tr>
+    <tr><td><code>(power-off [secs])</code></td><td>Board fully off and the screen keeps its image. With <i>secs</i> (up to 15300), the clock alarm switches it back on. Needs battery power: on USB it deep-sleeps instead.</td></tr>
+    <tr><td><code>(wake-reason)</code></td><td>Why it started: <code>power-on alarm timer restart reset crash brownout</code>.</td></tr>
+  </table>
+  <p>After a deep sleep or power-off, the board runs <code>/autorun.lisp</code> (on flash) if it exists. Hold a finger on the screen while it starts to skip it. A battery-friendly display is then a file like this:</p>
+<pre>; /autorun.lisp
+(wifi-wait)                 ; WiFi reconnects in the background after a restart
+(show-weather)              ; your drawing code
+(power-off 1800)            ; off for 30 minutes; the alarm brings it back</pre>
   <h3>Things to know</h3>
   <p>The browser and the USB serial REPL share one interpreter. A web request is answered only while the serial REPL is idle, and a long-running program blocks everything until it finishes. To stop a runaway program, press the reset button, or send <code>~</code> over the serial monitor. Definitions live in RAM until reset; keep programs in files and <code>load</code> them.</p>
 </template>
@@ -427,6 +440,20 @@ data                          ; objects become (("key" . value) ...)
 (book-goto 2)          ; chapter index from book-toc
 (book-next)            ; returns (chapter page pages)
 (book-fonts)
+</script>
+<script type="text/plain" class="example" data-title="Sleep until touched" data-desc="Light sleep with the screen showing a message; a touch (or 60 seconds) wakes it. This page loses its connection while the board sleeps, so check the result with *woke* afterwards.">
+(defvar *woke* nil)
+(with-batch
+  (clear-screen)
+  (set-font 4)
+  (draw-text "Sleeping - touch the screen to wake" 480 230 1)
+  (set-font 0))
+(setq *woke* (light-sleep 60))
+(with-batch
+  (clear-screen)
+  (set-font 4)
+  (draw-text (format nil "Woken by ~a" *woke*) 480 230 1)
+  (set-font 0))
 </script>
 <script type="text/plain" class="example" data-title="Lisp basics" data-desc="Recursion, lambdas, mapcar and timing.">
 (defun fib (n)
