@@ -99,13 +99,14 @@ const char LispLibrary[] =
 "            ((< x 180) (book-prev))\n"
 "            (t (book-next))))))\n"
 "(defun reader (&optional path)\n"
-"  (let ((next (if path (reader-read path) 'library)))\n"
-"    (loop\n"
-"      (unless (eq next 'library) (return))\n"
-"      (let ((b (reader-library)))\n"
-"        (if b (setq next (reader-read b)) (return)))))\n"
-"  (book-close)\n"
-"  (epd-mode 1)\n"
+"  (unwind-protect\n"
+"    (let ((next (if path (reader-read path) 'library)))\n"
+"      (loop\n"
+"        (unless (eq next 'library) (return))\n"
+"        (let ((b (reader-library)))\n"
+"          (if b (setq next (reader-read b)) (return)))))\n"
+"    (book-close)\n"
+"    (epd-mode 1))\n"
 "  nil)";
 
 // Compile options
@@ -622,6 +623,7 @@ extern bool WebCapture, WebIdle;
 void webcapture (char c);
 void webpoll ();
 void webinit ();
+void webstopcheck ();
 int paperlightsleep (uint64_t us, bool touch);
 void initwake ();
 void autorunfile ();
@@ -6743,6 +6745,7 @@ void testescape () {
   if (millis()-n < 500) return;
   n = millis();
   if (Serial.available() && Serial.read() == '~') error2("escape!");
+  webstopcheck();   // Stop button in the browser (port 8081)
 }
 
 bool colonp (symbol_t name) {

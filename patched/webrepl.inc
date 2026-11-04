@@ -289,10 +289,39 @@ void otastart () {
   ArduinoOTA.begin();
 }
 
+// ---- Stop control on port 8081 -------------------------------------------------------
+// The main web server is busy while a program runs (it is handling the request that
+// started it), so a tiny second listener answers GET /stop and GET /status.
+WiFiServer CtlServer(8081);
+bool CtlStarted = false;
+bool StopRequested = false;
+
+void ctlpoll (bool busy) {
+  if (!CtlStarted) return;
+  WiFiClient c = CtlServer.accept();
+  if (!c) return;
+  c.setTimeout(200);
+  String line = c.readStringUntil('\n');
+  unsigned long t = millis();
+  while (c.connected() && millis() - t < 50) { if (c.available()) c.read(); else break; }
+  bool stop = line.startsWith("GET /stop") || line.startsWith("POST /stop");
+  const char *body = stop ? (busy ? "stopping" : "idle") : (busy ? "busy" : "idle");
+  c.printf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nAccess-Control-Allow-Origin: *\r\n"
+           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: %d\r\n\r\n%s", (int)strlen(body), body);
+  c.stop();
+  if (stop && busy) StopRequested = true;
+}
+
+// Called from uLisp's testescape() while a program runs
+void webstopcheck () {
+  ctlpoll(true);
+  if (StopRequested) { StopRequested = false; error2("stopped from the browser"); }
+}
+
 // Light sleep: switch WiFi off, sleep, then reconnect and restart the web services
 int paperlightsleep (uint64_t us, bool touch) {
   bool wifi = WiFi.getMode() != WIFI_OFF;
-  if (WebStarted) { webserver.stop(); ArduinoOTA.end(); MDNS.end(); WebStarted = false; }
+  if (WebStarted) { webserver.stop(); CtlServer.stop(); CtlStarted = false; ArduinoOTA.end(); MDNS.end(); WebStarted = false; }
   if (wifi) { WiFi.disconnect(true); WiFi.mode(WIFI_OFF); }
   Serial.flush();
   tft.waitDisplay();
@@ -305,6 +334,7 @@ int paperlightsleep (uint64_t us, bool touch) {
 
 void webstart () {
   static bool handlers = false;
+  CtlServer.begin(); CtlStarted = true;
   if (handlers) {   // restarting after light sleep
     webserver.begin();
     MDNS.begin("ulisp");
@@ -354,5 +384,6 @@ void webpoll () {
     return;
   }
   webserver.handleClient();
+  ctlpoll(false);
   ArduinoOTA.handle();
 }

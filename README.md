@@ -45,7 +45,11 @@ directly to the computer with a different cable; a flaky USB link caused this be
 Run `(wifi-connect "ssid" "password")` once over serial; the ESP32 saves the network and reconnects on boot.
 The address is printed on serial and along the bottom of the screen.
 Web requests are answered only while the serial REPL sits at its prompt (uLisp is single-threaded).
-Stop a runaway web program by sending `~` over serial, or press reset.
+To end a running program, press **Stop** at the top of the web IDE (or Esc). It appears while a request is running.
+Stop works for programs started from serial or autorun too: `curl http://ulisp.local:8081/stop`.
+A second, minimal listener on port 8081 handles this, because the main server is busy while a program runs;
+`/status` answers `busy` or `idle`. The program stops at its next escape check (within 0.5 s, in Lisp code,
+`delay` or `wait-touch`), exactly like sending `~` over serial.
 
 ## Web API
 `POST /eval` (text/plain Lisp source, returns the output) · `GET /api/info` · `GET /api/docs` ·

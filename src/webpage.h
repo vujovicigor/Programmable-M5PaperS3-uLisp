@@ -104,6 +104,7 @@ const char WEBPAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
   <button class="tab" data-v="docs">Docs</button>
   <button class="tab" data-v="examples">Examples</button>
   <a class="tab" href="/api/screen" target="_blank" title="What the e-ink screen shows right now" style="text-decoration:none">Screenshot</a>
+  <button class="b danger" id="stopbtn" hidden title="Stop the running program (Esc)" style="margin-left:auto;border-color:var(--err);color:var(--err)">Stop</button>
   <div class="status" id="status"></div>
 </header>
 <main>
@@ -117,7 +118,7 @@ const char WEBPAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
         <button class="b" type="button" id="replclear">Clear</button>
       </div>
     </form>
-    <div class="hint" style="padding:0 16px 8px;background:var(--panel)">⌘/Ctrl+Enter runs · ↑/↓ history (single-line input) · several forms at once are fine · runaway loop: press reset, or send <code>~</code> over serial</div>
+    <div class="hint" style="padding:0 16px 8px;background:var(--panel)">⌘/Ctrl+Enter runs · ↑/↓ history (single-line input) · several forms at once are fine · Stop (or Esc) ends a running program</div>
   </section>
 
   <section class="view" id="editor">
@@ -196,7 +197,7 @@ const char WEBPAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
 (show-weather)              ; your drawing code
 (power-off 1800)            ; off for 30 minutes; the alarm brings it back</pre>
   <h3>Things to know</h3>
-  <p>The browser and the USB serial REPL share one interpreter. A web request is answered only while the serial REPL is idle, and a long-running program blocks everything until it finishes. To stop a runaway program, press the reset button, or send <code>~</code> over the serial monitor. Definitions live in RAM until reset; keep programs in files and <code>load</code> them.</p>
+  <p>The browser and the USB serial REPL share one interpreter. A web request is answered only while the serial REPL is idle, and a long-running program blocks the rest of the page until it finishes. To end a program, press <b>Stop</b> at the top of the page (or Esc). That works for programs started from the serial REPL or autorun too, through <code>http://ulisp.local:8081/stop</code>; sending <code>~</code> over serial also works. Definitions live in RAM until reset; keep programs in files and <code>load</code> them.</p>
 </template>
 
 <!-- Examples: each block is a runnable program. data-title / data-desc describe it. -->
@@ -482,12 +483,24 @@ function show(v) {
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => show(t.dataset.v));
 
 // ---- Device ----
+const stopbtn = $('#stopbtn');
+async function stopProgram() {
+  stopbtn.textContent = 'Stopping…'; stopbtn.disabled = true;
+  try { await fetch(`http://${location.hostname}:8081/stop`, { cache:'no-store' }); } catch {}
+}
+stopbtn.onclick = stopProgram;
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && busy) { e.preventDefault(); stopProgram(); } });
 async function evalLisp(src) {
   busy = true;
+  const t = setTimeout(() => { stopbtn.hidden = false; }, 400);   // only for programs that take a while
   try {
     const r = await fetch('/eval', { method:'POST', headers:{'Content-Type':'text/plain'}, body:src });
     return (await r.text()).replace(/\r/g, '').replace(/\n+$/, '');
-  } finally { busy = false; updStatus(); }
+  } finally {
+    clearTimeout(t); busy = false;
+    stopbtn.hidden = true; stopbtn.disabled = false; stopbtn.textContent = 'Stop';
+    updStatus();
+  }
 }
 const isErr = t => /^Error/m.test(t);
 async function updStatus() {

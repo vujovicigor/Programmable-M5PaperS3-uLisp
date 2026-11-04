@@ -111,12 +111,14 @@
             ((< x 180) (book-prev))
             (t (book-next))))))
 
+; unwind-protect closes the book even when the reader is stopped from the browser
 (defun reader (&optional path)
-  (let ((next (if path (reader-read path) 'library)))
-    (loop
-      (unless (eq next 'library) (return))
-      (let ((b (reader-library)))
-        (if b (setq next (reader-read b)) (return)))))
-  (book-close)
-  (epd-mode 1)
+  (unwind-protect
+    (let ((next (if path (reader-read path) 'library)))
+      (loop
+        (unless (eq next 'library) (return))
+        (let ((b (reader-library)))
+          (if b (setq next (reader-read b)) (return)))))
+    (book-close)
+    (epd-mode 1))
   nil)

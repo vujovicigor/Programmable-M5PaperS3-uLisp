@@ -521,6 +521,7 @@ extern bool WebCapture, WebIdle;
 void webcapture (char c);
 void webpoll ();
 void webinit ();
+void webstopcheck ();
 int paperlightsleep (uint64_t us, bool touch);
 void initwake ();
 void autorunfile ();
@@ -6186,6 +6187,7 @@ void testescape () {
   if (millis()-n < 500) return;
   n = millis();
   if (Serial.available() && Serial.read() == '~') error2("escape!");
+  webstopcheck();   // Stop button in the browser (port 8081)
 }
 
 bool colonp (symbol_t name) {
