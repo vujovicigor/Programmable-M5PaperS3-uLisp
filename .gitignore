@@ -1,0 +1,4 @@
+.pio/
+src-ulisp/
+.DS_Store
+__pycache__/
