@@ -490,13 +490,53 @@ async function stopProgram() {
 }
 stopbtn.onclick = stopProgram;
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && busy) { e.preventDefault(); stopProgram(); } });
+// Replies can be lost: light sleep switches WiFi off, and the board restarts its web server on waking.
+// Every request carries an id; the board keeps the output of the last one at /api/last.
+const pause = ms => new Promise(r => setTimeout(r, ms));
+async function boardStatus() {
+  const ac = new AbortController(), t = setTimeout(() => ac.abort(), 2000);
+  try { return await (await fetch(`http://${location.hostname}:8081/status`, { cache:'no-store', signal:ac.signal })).text(); }
+  catch { return 'unreachable'; } finally { clearTimeout(t); }
+}
+const clean = t => t.replace(/\r/g, '').replace(/\n+$/, '');
+async function lastOutput(id) {   // waits for the board to be idle, then returns its kept output for id (or null)
+  for (let i = 0; i < 40 && (await boardStatus()) !== 'idle'; i++) await pause(1500);
+  try {
+    const r = await fetch('/api/last', { cache:'no-store' });
+    if (r.ok && r.headers.get('X-Eval-Id') === id) return clean(await r.text());
+  } catch {}
+  return null;
+}
 async function evalLisp(src) {
   busy = true;
   const t = setTimeout(() => { stopbtn.hidden = false; }, 400);   // only for programs that take a while
+  let watching = true;
   try {
-    const r = await fetch('/eval', { method:'POST', headers:{'Content-Type':'text/plain'}, body:src });
-    return (await r.text()).replace(/\r/g, '').replace(/\n+$/, '');
+    for (let attempt = 0; ; attempt++) {
+      const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const ac = new AbortController();
+      (async () => {   // a hung connection: abort once the board says it is idle twice in a row
+        await pause(3000);
+        let idle = 0;
+        while (watching && !ac.signal.aborted) {
+          idle = (await boardStatus()) === 'idle' ? idle + 1 : 0;
+          if (idle >= 2 && watching) { ac.abort(); return; }
+          await pause(1500);
+        }
+      })();
+      try {
+        const r = await fetch('/eval?id=' + id, { method:'POST', headers:{'Content-Type':'text/plain'}, body:src, signal:ac.signal });
+        return clean(await r.text());
+      } catch (e) {
+        ac.abort();
+        const out = await lastOutput(id);
+        if (out !== null) return out + '\n(reply lost while the program ran, e.g. during light-sleep; output recovered)';
+        if (attempt === 0) continue;          // the request never ran (board was restarting): send it once more
+        throw e;
+      }
+    }
   } finally {
+    watching = false;
     clearTimeout(t); busy = false;
     stopbtn.hidden = true; stopbtn.disabled = false; stopbtn.textContent = 'Stop';
     updStatus();

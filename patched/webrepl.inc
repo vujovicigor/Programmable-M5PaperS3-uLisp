@@ -12,6 +12,7 @@
 
 WebServer webserver(80);
 String WebOut;
+String LastOut, LastId;   // output of the most recent /eval
 bool WebCapture = false;
 bool WebIdle = false;
 bool WebStarted = false;
@@ -348,9 +349,15 @@ void webstart () {
     webserver.send_P(200, "text/html", WEBPAGE);
   });
   webserver.on("/eval", HTTP_POST, []() {
+    String id = webserver.arg("id");
     webeval(webserver.arg("plain"));
+    LastOut = WebOut; LastId = id;   // kept in case the reply is lost (e.g. light sleep turned WiFi off)
     webserver.send(200, "text/plain; charset=utf-8", WebOut);
     WebOut = "";
+  });
+  webserver.on("/api/last", HTTP_GET, []() {
+    webserver.sendHeader("X-Eval-Id", LastId);
+    webserver.send(200, "text/plain; charset=utf-8", LastOut);
   });
   webserver.on("/free", HTTP_GET, []() {
     webserver.send(200, "text/plain", String(Freespace + 1));
