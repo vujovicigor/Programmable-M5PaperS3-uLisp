@@ -466,6 +466,28 @@ data                          ; objects become (("key" . value) ...)
   (sort words string<))
 (time (fib 18))
 </script>
+<script type="text/plain" class="example" data-title="Macros and threading" data-desc="defmacro with backquote, gensym and macroexpand, then the Clojure-style threading macros -> ->> as-> some-> and cond->.">
+(defmacro while (test &body body)
+  `(loop (unless ,test (return)) ,@body))
+
+(defmacro swap (a b)
+  (let ((tmp (gensym)))
+    `(let ((,tmp ,a)) (setq ,a ,b) (setq ,b ,tmp))))
+
+(let ((i 0) (acc nil))
+  (while (< i 5) (push i acc) (incf i))
+  acc)
+
+(let ((x 1) (y 2)) (swap x y) (list x y))
+(macroexpand '(swap p q))
+
+(-> 5 (- 1) abs)
+(->> '(1 2 3 4) (mapcar (lambda (x) (* x x))) (apply +))
+(as-> 10 v (* v 2) (list 1 v 3))
+(some-> '(1 2) cdr car 1+)
+(some-> '(1 2) cdr cdr car 1+)
+(cond-> 1 t (+ 10) nil (* 100) t (* 2))
+</script>
 
 <script>
 const $ = s => document.querySelector(s);

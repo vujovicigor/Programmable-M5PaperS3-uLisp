@@ -502,7 +502,7 @@ const char LispLibrary[] =
 #define tstflag(x)         (Flags & 1<<(x))
 
 #define issp(x)            (x == ' ' || x == '\n' || x == '\r' || x == '\t')
-#define isbr(x)            (x == ')' || x == '(' || x == '"' || x == '#' || x == '\'')
+#define isbr(x)            (x == ')' || x == '(' || x == '"' || x == '#' || x == '\'' || x == '`' || x == ',')
 #define fntype(x)          (getminmax((uint16_t)(x))>>6)
 #define longsymbolp(x)     (((x)->name & 0x03) == 0)
 #define longnamep(x)       (((x) & 0x03) == 0)
@@ -520,7 +520,7 @@ const char LispLibrary[] =
 #define USERSTREAMS        16
 #define TRACEMAX 3  // Maximum number of traced functions
 enum type { ZZERO=0, SYMBOL=2, CODE=4, NUMBER=6, STREAM=8, CHARACTER=10, FLOAT=12, ARRAY=14, STRING=16, PAIR=18 };  // ARRAY STRING and PAIR must be last
-enum token { UNUSED, BRA, KET, QUO, DOT };
+enum token { UNUSED, BRA, KET, QUO, DOT, BQUO, UNQ, UNQS };
 enum fntypes_t { OTHER_FORMS, TAIL_FORMS, FUNCTIONS, SPECIAL_FORMS };
 
 // Typedefs
@@ -576,6 +576,8 @@ typedef const struct {
 enum builtins: builtin_t { NIL, TEE, NOTHING, OPTIONAL, FEATURES, INITIALELEMENT, ELEMENTTYPE, TEST, COLONA, COLONB,
 COLONC, BIT, AMPREST, LAMBDA, LET, LETSTAR, CLOSURE, PSTAR, QUOTE, DEFUN, DEFVAR, BIND, EQ, CAR, FIRST,
 CDR, REST, NTH, AREF, CHAR, STRINGFN, PINMODE, DIGITALWRITE, ANALOGREAD, REGISTER, FORMAT, 
+BACKQUOTE, UNQUOTE, UNQUOTESPLICING, MACRO, AMPBODY, THREADFIRST, THREADLAST, ASTHREAD,
+SOMETHREADFIRST, SOMETHREADLAST, CONDTHREADFIRST, CONDTHREADLAST,
  };
 
 // Global variables
@@ -627,6 +629,8 @@ void webstopcheck ();
 int paperlightsleep (uint64_t us, bool touch);
 void initwake ();
 void autorunfile ();
+// Macro forward references (patched/macros.inc)
+object *bsymbolnamed (const char *name);
 
 // Error handling
 
@@ -801,6 +805,7 @@ void doze (int secs);
 void pcount (char c);
 uint8_t atomwidth (object *obj);
 uint8_t basewidth (object *obj, uint8_t base);
+const char *quoteprefix (object *obj);
 bool quoted (object *obj);
 int subwidth (object *obj, int w);
 int subwidthlist (object *form, int w);
@@ -1077,6 +1082,8 @@ void processkey (char c);
 void gserial_flush ();
 int gserial ();
 object *nextitem (gfun_t gfun);
+bool prefixtoken (object *item);
+object *readprefixed (object *item, gfun_t gfun);
 object *readrest (gfun_t gfun);
 int glast ();
 object *readmain (gfun_t gfun);
@@ -3115,8 +3122,18 @@ uint8_t basewidth (object *obj, uint8_t base) {
   return PrintCount;
 }
 
+const char *quoteprefix (object *obj) {
+  if (!(consp(obj) && symbolp(car(obj)) && consp(cdr(obj)) && cddr(obj) == NULL)) return NULL;
+  symbol_t name = car(obj)->name;
+  if (name == sym(QUOTE)) return "'";
+  if (name == sym(BACKQUOTE)) return "`";
+  if (name == sym(UNQUOTE)) return ",";
+  if (name == sym(UNQUOTESPLICING)) return ",@";
+  return NULL;
+}
+
 bool quoted (object *obj) {
-  return (consp(obj) && car(obj) != NULL && car(obj)->name == sym(QUOTE) && consp(cdr(obj)) && cddr(obj) == NULL);
+  return quoteprefix(obj) != NULL;
 }
 
 int subwidth (object *obj, int w) {
@@ -3139,8 +3156,9 @@ void superprint (object *form, int lm, pfun_t pfun) {
     if (isbuiltin(form, NOTHING)) printsymbol(form, pfun);
     else printobject(form, pfun);
   } else if (quoted(form)) {
-    pfun('\'');
-    superprint(car(cdr(form)), lm + 1, pfun);
+    const char *prefix = quoteprefix(form);
+    pfstring(prefix, pfun);
+    superprint(car(cdr(form)), lm + strlen(prefix), pfun);
   } else {
     lm = lm + PPINDENT;
     bool fits = (subwidth(form, ppwidth - lm - PPINDENT) >= 0);
@@ -3153,6 +3171,9 @@ void superprint (object *form, int lm, pfun_t pfun) {
     }
     while (form != NULL) {
       if (atom(form)) { pfstring(" . ", pfun); printobject(form, pfun); pfun(')'); return; }
+      else if (!separate && quoted(form) && !isbuiltin(car(form), QUOTE)) { // (a . ,b)
+        pfstring(" . ", pfun); superprint(form, lm+extra, pfun); pfun(')'); return;
+      }
       else if (separate) { 
         pfun('(');
         separate = false;
@@ -5148,6 +5169,8 @@ object *fn_pprintall (object *args, object *env) {
     pln(pfun);
     if (consp(val) && symbolp(car(val)) && builtin(car(val)->name) == LAMBDA) {
       superprint(cons(bsymbol(DEFUN), cons(var, cdr(val))), 0, pfun);
+    } else if (consp(val) && isbuiltin(car(val), MACRO)) {
+      superprint(cons(bsymbolnamed("defmacro"), cons(var, cdr(val))), 0, pfun);
     } else {
       superprint(cons(bsymbol(DEFVAR), cons(var, cons(quote(val), NULL))), 0, pfun);
     }
@@ -6417,6 +6440,8 @@ const char doc_displaysize[] = "(display-size)\n"
 const char doc_display[] = "(display)\n"
 "Needed on OLED displays to update the display from the memory buffer.";
 
+#include "../patched/macros.inc"
+
 // Built-in symbol lookup table
 const tbl_entry_t lookup_table[] = {
   { "nil", NULL, 0000, doc_nil },
@@ -6455,6 +6480,22 @@ const tbl_entry_t lookup_table[] = {
   { "analogread", fn_analogread, 0211, doc_analogread },
   { "register", fn_register, 0212, doc_register },
   { "format", fn_format, 0227, doc_format },
+  { "backquote", sp_backquote, 0311, doc_backquote },
+  { "unquote", sp_unquote, 0311, doc_unquote },
+  { "unquote-splicing", sp_unquote, 0311, doc_unquotesplicing },
+  { "macro", NULL, 0000, doc_macro },
+  { "&body", NULL, 0000, doc_ampbody },
+  { "->", mc_threadfirst, 0117, doc_threadfirst },
+  { "->>", mc_threadlast, 0117, doc_threadlast },
+  { "as->", mc_asthread, 0127, doc_asthread },
+  { "some->", mc_somethreadfirst, 0117, doc_somethreadfirst },
+  { "some->>", mc_somethreadlast, 0117, doc_somethreadlast },
+  { "cond->", mc_condthreadfirst, 0117, doc_condthreadfirst },
+  { "cond->>", mc_condthreadlast, 0117, doc_condthreadlast },
+  { "defmacro", sp_defmacro, 0327, doc_defmacro },
+  { "macroexpand-1", fn_macroexpand1, 0211, doc_macroexpand1 },
+  { "macroexpand", fn_macroexpand, 0211, doc_macroexpand },
+  { "gensym", fn_gensym, 0201, doc_gensym },
   { "or", sp_or, 0307, doc_or },
   { "setq", sp_setq, 0327, doc_setq },
   { "loop", sp_loop, 0307, doc_loop },
@@ -6814,6 +6855,13 @@ object *eval (object *form, object *env) {
   if (symbolp(function) && builtinp(function->name)) {
     builtin_t name = builtin(function->name);
 
+    // Built-in macro: replace the call with its expansion and evaluate that
+    if (name >= THREADFIRST && name <= CONDTHREADLAST) {
+      bool expanded;
+      form = displace(form, macroexpand1(form, env, &expanded));
+      goto EVAL;
+    }
+
     if ((name == LET) || (name == LETSTAR)) {
       if (args == NULL) error2(noargument);
       object *assigns = first(args);
@@ -6869,6 +6917,11 @@ object *eval (object *form, object *env) {
     || car(function)->type == CODE)) { Context = NIL; error(illegalfn, function); }
   if (symbolp(function)) {
     object *pair = findpair(function, env);
+    if (pair != NULL && macrop(cdr(pair))) {
+      // Macro call: replace it with its expansion and evaluate that
+      form = displace(form, expandmacro(cdr(pair), function, args, env));
+      goto EVAL;
+    }
     if (pair != NULL) head = cons(cdr(pair), NULL); else head = cons(function, NULL);
   } else head = cons(eval(function, env), NULL);
   protect(head); // Don't GC the result list
@@ -7372,6 +7425,13 @@ object *nextitem (gfun_t gfun) {
   if (ch == ')') return (object *)KET;
   if (ch == '(') return (object *)BRA;
   if (ch == '\'') return (object *)QUO;
+  if (ch == '`') return (object *)BQUO;
+  if (ch == ',') {
+    ch = gfun();
+    if (ch == '@') return (object *)UNQS;
+    LastChar = ch;
+    return (object *)UNQ;
+  }
 
   // Parse string
   if (ch == '"') return readstring('"', true, gfun);
@@ -7484,6 +7544,17 @@ object *nextitem (gfun_t gfun) {
   return internlong(buffer);
 }
 
+bool prefixtoken (object *item) {
+  return item == (object *)QUO || item == (object *)BQUO || item == (object *)UNQ || item == (object *)UNQS;
+}
+
+// 'x `x ,x ,@x => (quote x) (backquote x) (unquote x) (unquote-splicing x)
+object *readprefixed (object *item, gfun_t gfun) {
+  builtin_t b = (item == (object *)QUO) ? QUOTE : (item == (object *)BQUO) ? BACKQUOTE :
+    (item == (object *)UNQ) ? UNQUOTE : UNQUOTESPLICING;
+  return cons(bsymbol(b), cons(read(gfun), NULL));
+}
+
 object *readrest (gfun_t gfun) {
   object *item = nextitem(gfun);
   object *head = NULL;
@@ -7492,8 +7563,8 @@ object *readrest (gfun_t gfun) {
   while (item != (object *)KET) {
     if (item == (object *)BRA) {
       item = readrest(gfun);
-    } else if (item == (object *)QUO) {
-      item = cons(bsymbol(QUOTE), cons(read(gfun), NULL));
+    } else if (prefixtoken(item)) {
+      item = readprefixed(item, gfun);
     } else if (item == (object *)DOT) {
       tail->cdr = read(gfun);
       if (readrest(gfun) != NULL) error2("malformed list");
@@ -7531,7 +7602,7 @@ object *read (gfun_t gfun) {
   if (item == (object *)KET) error2("incomplete list");
   if (item == (object *)BRA) return readrest(gfun);
   if (item == (object *)DOT) return read(gfun);
-  if (item == (object *)QUO) return cons(bsymbol(QUOTE), cons(read(gfun), NULL));
+  if (prefixtoken(item)) return readprefixed(item, gfun);
   return item;
 }
 

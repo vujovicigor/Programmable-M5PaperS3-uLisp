@@ -29,6 +29,7 @@ and a browser IDE served over WiFi with a REPL, an editor, a file manager, docs 
 - `patched/ulisp-esp.ino`: upstream uLisp ESP 4.9a ([technoblogy/ulisp-esp](https://github.com/technoblogy/ulisp-esp)
   @ `aa9b24c`), plus a PaperS3 board block (`M5PAPERS3`), e-ink default colours, the line editor, extensions and web hooks
 - `patched/paper-ext.inc`: the PaperS3 Lisp library (the second uLisp lookup table)
+- `patched/macros.inc`: `defmacro`, backquote, `gensym` and the threading macros (their symbols are in the main table)
 - `patched/webrepl.inc`: the web server, `/eval` and the file API
 - `src/webpage.h`: the browser IDE (a single HTML page)
 - `patched/reader.inc`: the EPUB engine; `patched/library.lisp`: Lisp built into the firmware (the reader UI),
@@ -68,6 +69,35 @@ Examples live in `src/webpage.h` as `<script type="text/plain" class="example">`
 | `(load path)` | evaluate a Lisp file |
 | `(http-get url)`, `(http-post url body [type])`, `(http-status)`, `(wifi-rssi)` | network (https OK, certificates not verified) |
 | `(json-parse str)`, `(json-string data [pretty])`, `(json-get data key-or-index ...)`, `(http-get-json url)` | JSON: objects become `(("key" . value) ...)`, arrays become lists; `true` → `t`, `false`/`null` → `nil` |
+
+## Macros and threading
+uLisp normally has no macros. This firmware adds `defmacro`, backquote and the Clojure threading macros
+(in `patched/macros.inc`).
+
+```lisp
+(defmacro while (test &body body)
+  `(loop (unless ,test (return)) ,@body))
+(-> 5 (- 1) abs)                            ; => 4, i.e. (abs (- 5 1))
+(->> '(1 2 3) (mapcar 1+) (apply +))        ; => 9
+```
+
+| Form | |
+|---|---|
+| `` `x``, `,x`, `,@x` | backquote, unquote, unquote-splicing (nested backquotes work); `` `(a . ,b) `` too |
+| `(defmacro name (params) form*)` | params can use `&optional`, `&rest`, `&body` or a dotted tail `(a . rest)` |
+| `(macroexpand-1 form)`, `(macroexpand form)` | show an expansion |
+| `(gensym [prefix])` | a new symbol like `#:G12`, never `eq` to any other symbol |
+| `(-> x form*)`, `(->> x form*)` | insert x as the first / last argument of each form in turn; a bare symbol `f` means `(f x)` |
+| `(as-> x name form*)` | bind name to x, then to each form in turn |
+| `(some-> x form*)`, `(some->> x form*)` | like `->`/`->>`, but return nil as soon as a step gives nil |
+| `(cond-> x test form ...)`, `(cond->> ...)` | thread x only through the forms whose test is true |
+
+Macros are global and expand when a call is first evaluated, so a function can use a macro defined after it.
+The call is then replaced in place by its expansion (a "displacing" macro), so the expansion is done only once:
+`pprint` of a function shows the expanded code, and redefining a macro doesn't change call sites that have already run.
+Lambda lists don't destructure, and there is no `&whole`, `&environment` or `macrolet`.
+Thread-first puts the value first, which suits `(- x 1)` or `(nth n list)` but not uLisp's `(assoc key list)`;
+use `->>` there.
 
 ## Sleep, power-off and wake-up
 | Function | Power | Wakes on | Afterwards |
